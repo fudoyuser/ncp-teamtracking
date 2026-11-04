@@ -9,7 +9,7 @@ create table if not exists public.seeding_campaigns (
   id uuid primary key default gen_random_uuid(),
   title text not null,
   post_url text not null default '',
-  actions text[] not null default '{like,comment}',  -- like / comment / share
+  actions text[] not null default '{like,comment,share}',  -- like + comment = hoàn thành; share = cộng điểm (không bắt buộc)
   deadline date,
   member_ids uuid[] not null default '{}',                 -- người cần tham gia
   ban_id uuid references public.bans(id) on delete set null,

@@ -471,10 +471,13 @@
   }
 
   /* ============================== Seeding ============================== */
-  const ACTIONS = { like: '👍 Like', comment: '💬 Comment', share: '🔁 Share' };
+  const ACTIONS = { like: '👍 Like', comment: '💬 Comment', share: '⭐ Share' };
+  const BONUS = ['share']; // không bắt buộc – cộng điểm thêm
   const checkOf = (cid, mid, action) => D().checks.find((x) => x.campaignId === cid && x.memberId === mid && x.action === action);
   const actionDone = (cid, mid, action) => { const c = checkOf(cid, mid, action); return !!c && (c.verified === 'found' || (c.selfDone && c.verified !== 'not_found')); };
-  const memberDone = (c, mid) => c.actions.every((a) => actionDone(c.id, mid, a));
+  const required = (c) => c.actions.filter((a) => !BONUS.includes(a));
+  const memberDone = (c, mid) => required(c).every((a) => actionDone(c.id, mid, a));
+  const bonusCount = (c) => c.memberIds.filter((mid) => c.actions.some((a) => BONUS.includes(a) && actionDone(c.id, mid, a))).length;
   const canSeed = () => me().isAdmin || me().bans.some((b) => b.isLead);
   const fbLink = (m) => (m && m.fbUrl ? ` <a href="${esc(m.fbUrl)}" target="_blank" rel="noopener" title="Trang Facebook" class="fb-link">ⓕ</a>` : '');
 
@@ -488,13 +491,13 @@
       <div class="seed-actions">${c.actions.map((a) => {
         const ch = checkOf(c.id, me().id, a) || {};
         const v = ch.verified === 'found' ? '<span class="badge ok">🟢 Đã thấy tên bạn</span>' : ch.verified === 'not_found' ? '<span class="badge danger">🔴 Chưa thấy tên bạn</span>' : '';
-        return `<div class="seed-act"><label class="check"><input type="checkbox" data-change="seed-self" data-cid="${esc(c.id)}" data-action="${a}" ${ch.selfDone ? 'checked' : ''}> ${ACTIONS[a]}</label> ${v}
+        return `<div class="seed-act"><label class="check"><input type="checkbox" data-change="seed-self" data-cid="${esc(c.id)}" data-action="${a}" ${ch.selfDone ? 'checked' : ''}> ${ACTIONS[a]}${BONUS.includes(a) ? ' <span class="muted small">(không bắt buộc, cộng điểm)</span>' : ''}</label> ${v}
 </div>`;
       }).join('')}</div></div>`;
     const allCard = (c) => {
       const done = c.memberIds.filter((mid) => memberDone(c, mid)).length;
       return `<div class="card seed-row"><div class="seed-row-main"><b>${esc(c.title)}</b>
-        <div class="muted small">${c.actions.map((a) => ACTIONS[a]).join(' · ')}${c.deadline ? ' · hạn ' + fmtDate(c.deadline, true) : ''} · ${c.memberIds.length} người</div></div>
+        <div class="muted small">Bắt buộc: ${required(c).map((a) => ACTIONS[a]).join(' + ')}${c.actions.includes('share') ? ` · ⭐ ${bonusCount(c)} người share` : ''}${c.deadline ? ' · hạn ' + fmtDate(c.deadline, true) : ''} · ${c.memberIds.length} người</div></div>
         <div class="bar ok seed-progress" data-tip="${done}/${c.memberIds.length} người đã hoàn thành"><div style="width:${pct(done, c.memberIds.length) || 0}%"></div><span>${done}/${c.memberIds.length}</span></div>
         <button class="btn small" data-act="seed-detail" data-id="${esc(c.id)}">Chi tiết</button></div>`;
     };
@@ -532,11 +535,11 @@
         <p class="small">${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết trên Facebook ↗</a> · ` : ''}${c.deadline ? 'Hạn ' + fmtDate(c.deadline, true) : 'Không có hạn'}</p>
         ${lead ? `<div class="hint"><b>Đối chiếu:</b> mở bài trên Facebook → bấm vào số lượt cảm xúc / bình luận / chia sẻ → bôi đen cả danh sách tên → copy → bấm nút bên dưới và dán vào.
           <div class="seed-verify-btns">${c.actions.map((a) => `<button class="btn small" data-act="seed-verify" data-id="${esc(c.id)}" data-action="${a}">📋 Đối chiếu ${ACTIONS[a]}</button>`).join('')}</div></div>` : ''}
-        <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${c.actions.map((a) => `<th>${ACTIONS[a]}</th>`).join('')}<th></th></tr></thead><tbody>
+        <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${c.actions.map((a) => `<th>${ACTIONS[a]}${BONUS.includes(a) ? ' <span class="muted small">(+điểm)</span>' : ''}</th>`).join('')}<th>Hoàn thành</th></tr></thead><tbody>
           ${rows.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}${m.fbName ? `<div class="muted small">FB: ${esc(m.fbName)}</div>` : ''}</td>
             ${c.actions.map((a) => `<td>${cell(m, a)}</td>`).join('')}<td>${memberDone(c, m.id) ? '✔' : ''}</td></tr>`).join('')}
         </tbody></table></div>
-        <p class="muted small">"Hoàn thành" = có tên khi đối chiếu, hoặc tự báo đã làm mà chưa bị đối chiếu là "Chưa thấy".</p>
+        <p class="muted small"><b>Hoàn thành</b> = có đủ ${required(c).map((a) => ACTIONS[a]).join(' + ')} (có tên khi đối chiếu, hoặc tự báo mà chưa bị đối chiếu là "Chưa thấy"). ${c.actions.includes('share') ? `<b>⭐ Share</b> không bắt buộc – ${bonusCount(c)} người đã share, dùng để cộng điểm.` : ''}</p>
       </div>
       <footer class="m-foot">${lead ? `<div><button type="button" class="btn danger-ghost" data-act="seed-delete" data-id="${esc(c.id)}">Xóa đợt</button>
         <button type="button" class="btn ghost" data-act="seed-edit" data-id="${esc(c.id)}">Sửa</button></div>` : '<span></span>'}
@@ -545,7 +548,7 @@
 
   function openSeedForm(c) {
     const creating = !c;
-    c = c || { title: '', postUrl: '', actions: ['like', 'comment'], deadline: '', memberIds: [] };
+    c = c || { title: '', postUrl: '', actions: ['like', 'comment', 'share'], deadline: '', memberIds: [] };
     const groups = D().bans.map((b) => ({ b, ms: activeMembers().filter((m) => m.bans.some((x) => x.banId === b.id)) }));
     const noBan = activeMembers().filter((m) => !m.bans.length);
     const box = (m) => `<label class="check small"><input type="checkbox" name="mem" value="${esc(m.id)}" ${c.memberIds.includes(m.id) ? 'checked' : ''}> ${esc(m.name)}</label>`;
@@ -553,7 +556,7 @@
       <div class="m-body">
         <label>Tên đợt *<input name="title" required value="${esc(c.title)}" placeholder="VD: Seeding bài mở đơn – Chuyện nghề Quản lý cửa hàng"></label>
         <label>Link bài viết trên fanpage<input name="postUrl" value="${esc(c.postUrl)}" placeholder="https://www.facebook.com/…"></label>
-        <div class="field"><span class="lbl">Cần làm</span><div class="row-wrap">${Object.keys(ACTIONS).map((a) => `<label class="check"><input type="checkbox" name="act" value="${a}" ${c.actions.includes(a) ? 'checked' : ''}> ${ACTIONS[a]}</label>`).join('')}</div></div>
+        <div class="field"><span class="lbl">Cần làm</span><div class="row-wrap">${Object.keys(ACTIONS).map((a) => `<label class="check"><input type="checkbox" name="act" value="${a}" ${c.actions.includes(a) ? 'checked' : ''}> ${ACTIONS[a]}${BONUS.includes(a) ? ' <span class="muted small">(không bắt buộc – cộng điểm)</span>' : ''}</label>`).join('')}</div></div>
         <label>Hạn chót<input name="deadline" type="date" value="${esc(c.deadline)}"></label>
         <div class="field"><span class="lbl">Ai tham gia</span>
           <div class="row-wrap"><button type="button" class="btn ghost small" data-act="seed-all">Chọn tất cả</button><button type="button" class="btn ghost small" data-act="seed-none">Bỏ chọn</button></div>
