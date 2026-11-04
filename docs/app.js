@@ -531,16 +531,16 @@
         ${canSeed() ? '<button class="btn primary" data-act="seed-new">＋ Tạo đợt seeding</button>' : ''}</div></div>
       ${!me().fbName && !me().fbUrl && mine.length ? '<div class="banner"><div><b>ⓕ Điền tên Facebook của bạn</b><br><span class="small">Nếu tên Facebook khác tên thật (vd. "Dương Phan", biệt danh…), hãy điền để hệ thống nhận ra bạn khi đối chiếu.</span></div><button class="btn primary small" data-act="my-fb">Điền ngay</button></div>' : ''}
       ${canSeed() ? (hasExt()
-        ? `<div class="banner"><div><b>🧩 Extension đã cài ✓</b> <span class="small">Bấm <b>▶ Quét</b> ở đợt seeding bên dưới → tự động quét và trả kết quả về đây.</span></div></div>`
+        ? `<div class="banner"><div><b>🧩 Extension đã cài ✓</b> <span class="small">Bấm <b>▶ Quét</b> ở đợt seeding bên dưới → Facebook mở ra → <b>bấm vào số lượt cảm xúc</b> dưới bài → tool tự lấy tên + bình luận và trả kết quả về đây.</span></div></div>`
         : `<details class="card bm-box"><summary><b>🔖 Cách quét seeding (cài 1 lần, dùng trên Chrome máy tính)</b></summary>
-        <p class="small"><b>⚡ Cách 1 – Cài extension (tự động hoàn toàn):</b> bấm <b>▶ Quét</b> → extension tự mở Facebook, tự quét, tự gửi kết quả về.</p>
+        <p class="small"><b>⚡ Cách 1 – Cài extension (tự động hoàn toàn):</b> bấm <b>▶ Quét</b> → extension mở Facebook → bạn bấm vào số lượt cảm xúc dưới bài → extension tự quét và gửi kết quả về.</p>
         <button class="btn primary small" data-act="show-ext-install">🧩 Hướng dẫn cài extension</button>
         <hr style="margin:10px 0;opacity:.2">
         <p class="small"><b>📣 Cách 2 – Bookmarklet (không cần cài extension):</b></p>
         <ol class="small">
           <li>Bật thanh dấu trang: nhấn <b>Ctrl + Shift + B</b>.</li>
           <li><b>Kéo</b> nút này lên thanh dấu trang: <a class="btn primary small bm-link" href="${esc(bookmarkletHref())}" onclick="event.preventDefault();alert('Đừng bấm ở đây – hãy KÉO nút này lên thanh dấu trang.');">📣 Gửi sang PCCV</a></li>
-          <li>Bấm <b>▶ Quét</b> ở đợt seeding → tab Facebook mở ra → bấm nút <b>📣</b> trên thanh dấu trang → đợi quét xong → bấm <b>"Mở PCCV"</b> → <b>Lưu tất cả</b>.</li>
+          <li>Bấm <b>▶ Quét</b> ở đợt seeding → tab Facebook mở ra → bấm nút <b>📣</b> trên thanh dấu trang → bấm vào số lượt cảm xúc dưới bài → đợi quét xong → bấm <b>"Mở PCCV"</b> → <b>Lưu tất cả</b>.</li>
         </ol></details>`) : ''}
       <section class="group"><h3>🙋 Việc seeding của tôi <span class="count">${myOpen.length} chưa xong</span></h3>
         ${mine.length ? mine.map(myCard).join('') : '<div class="empty">Bạn chưa có đợt seeding nào.</div>'}</section>
@@ -674,7 +674,7 @@
       <div class="m-body">
         <p class="small">${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết trên Facebook ↗</a> · ` : ''}${c.deadline ? 'Hạn ' + fmtDate(c.deadline, true) : 'Không có hạn'}
           · Lần quét gần nhất: ${scanActs(c).map((a) => { const sc = latestScan(c.id, a); return ACTIONS[a] + ' ' + (sc ? new Date(sc.createdAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) + ` (${sc.names.length} tên)` : '<span class="badge warn">chưa lưu – cần quét lại</span>'); }).join(' · ')}</p>
-        ${lead ? `<div class="hint">${c.postUrl ? `<button class="btn primary small" data-act="seed-scan" data-id="${esc(c.id)}">▶ Quét ngay</button> ${hasExt() ? 'Tự động quét và trả kết quả.' : 'Mở Facebook → bấm 📣 trên thanh dấu trang.'} <span class="muted small">Hoặc đối chiếu thủ công:</span>` : '<b>Đối chiếu thủ công:</b>'}
+        ${lead ? `<div class="hint">${c.postUrl ? `<button class="btn primary small" data-act="seed-scan" data-id="${esc(c.id)}">▶ Quét ngay</button> ${hasExt() ? 'Facebook mở ra → bấm vào số lượt cảm xúc dưới bài → tự quét và trả kết quả.' : 'Mở Facebook → bấm 📣 trên thanh dấu trang.'} <span class="muted small">Hoặc đối chiếu thủ công:</span>` : '<b>Đối chiếu thủ công:</b>'}
           <div class="seed-verify-btns">${scanActs(c).map((a) => `<button class="btn small" data-act="seed-verify" data-id="${esc(c.id)}" data-action="${a}">📋 Đối chiếu ${ACTIONS[a]}</button>`).join('')}</div></div>` : ''}
         <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${c.actions.map((a) => `<th>${ACTIONS[a]}${BONUS.includes(a) ? ' <span class="muted small">(+điểm)</span>' : ''}</th>`).join('')}<th>Hoàn thành</th></tr></thead><tbody>
           ${rows.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}${m.fbName ? `<div class="muted small">FB: ${esc(m.fbName)}</div>` : ''}</td>
@@ -933,7 +933,7 @@
     const repoUrl = 'https://github.com/fudoyuser/ncp-teamtracking';
     openModal(`<div>${modalHead('🧩 Cài extension PCCV Seeding Scanner', 'cài 1 lần – dùng mãi')}
       <div class="m-body">
-        <p>Extension giúp nút <b>▶ Quét</b> hoạt động tự động: bấm 1 nút → mở bài Facebook → tự cuộn & quét cảm xúc + bình luận → tự gửi kết quả về PCCV.</p>
+        <p>Extension giúp nút <b>▶ Quét</b> hoạt động tự động: bấm 1 nút → mở bài Facebook → bạn bấm vào số lượt cảm xúc → tự cuộn & quét cảm xúc + bình luận → tự gửi kết quả về PCCV.</p>
         <ol>
           <li>Tải thư mục extension: <a href="${esc(repoUrl)}/raw/main/docs/pccv-extension.zip" target="_blank" rel="noopener"><b>⬇ Tải pccv-extension.zip</b></a> và <b>giải nén</b>.</li>
           <li>Mở Chrome → gõ <code>chrome://extensions</code> vào thanh địa chỉ → Enter.</li>
@@ -1535,7 +1535,7 @@
       if (hasExt()) {
         // Extension: gửi lệnh qua custom event → content-pccv.js → background.js → mở FB → tự quét
         window.dispatchEvent(new CustomEvent('pccv-scan-start', { detail: { postUrl: c.postUrl, cid: c.id, site } }));
-        toast('Đang mở Facebook và quét tự động… kết quả sẽ tự trả về đây.');
+        toast('Đang mở Facebook… bấm vào số lượt cảm xúc dưới bài để bắt đầu quét.');
       } else {
         // Không có extension: mở FB với hash, user bấm bookmarklet
         const hash = '#pccv-scan=' + encodeURIComponent(JSON.stringify({ cid: c.id, site, t: Date.now() }));

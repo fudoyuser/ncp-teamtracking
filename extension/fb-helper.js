@@ -22,7 +22,7 @@ window.fbHelper = function fbHelper(site, opts) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v8</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v9</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -115,8 +115,6 @@ window.fbHelper = function fbHelper(site, opts) {
   var dialogs = visibleDialogs();
   var dlg = dialogs.length ? dialogs[dialogs.length - 1] : null;
   var listKind = dlg ? listKindOf(dlg) : '';
-  // Bài viết: nếu Facebook mở bài viết dạng khung thì lấy khung đó, không thì vùng nội dung chính
-  var postRoot = listKind ? null : (dlg || document.querySelector('[role="main"]') || document);
 
   // Chế độ TRANG CÁ NHÂN: không có khung danh sách, đường dẫn không phải bài viết → đọc tên + link thật
   var isPost = /\/(posts|permalink|photo|photos|videos|reel|watch|story\.php|groups|share|events)\b|story_fbid|fbid=|pfbid/.test(location.pathname + location.search);
@@ -265,62 +263,6 @@ window.fbHelper = function fbHelper(site, opts) {
     }
     return collectComments(el);
   };
-  var REACT = /^(thích|yêu thích|thương thương|haha|wow|buồn|phẫn nộ|like|love|care|sad|angry)\s*:\s*[\d.,]+/i;
-  var clickableOf = function (n) { return n.closest('[role="button"],[role="link"],[tabindex]') || n; };
-  // Trả về danh sách chỗ có thể bấm, theo thứ tự ưu tiên
-  var findTriggers = function (el, k) {
-    var nodes = Array.prototype.slice.call(el.querySelectorAll('[aria-label],[role="button"],span,div'));
-    var seen = [], out = [];
-    var add = function (n) { if (!n) return; var c = clickableOf(n); if (seen.indexOf(c) < 0 && !c.closest('[role="article"][aria-label]')) { seen.push(c); out.push(c); } };
-    if (k === 'like') {
-      nodes.forEach(function (n) { if (/^(tất cả cảm xúc|all reactions|xem ai đã bày tỏ cảm xúc|see who reacted|cảm xúc\s*:|reactions\s*:)/i.test((n.getAttribute('aria-label') || '').trim())) add(n); });
-      nodes.forEach(function (n) {
-        if (n.children.length === 0 && /^(tất cả cảm xúc|all reactions)\s*:?$/i.test(textOf(n))) {
-          // chữ ẩn "Tất cả cảm xúc:" – chỗ bấm thật là khối chứa con số tổng bên cạnh
-          var box = n.parentElement;
-          for (var up = 0; up < 4 && box; up++, box = box.parentElement) {
-            var btn = box.querySelector('[role="button"]');
-            if (btn && /\d/.test(btn.innerText || '')) { add(btn); break; }
-          }
-          add(n);
-        }
-      });
-      nodes.forEach(function (n) { if (REACT.test((n.getAttribute('aria-label') || '').trim())) add(n); });
-    } else {
-      nodes.forEach(function (n) { if (/^[\d.,]+\s*(k|n|tr|m)?\s*(lượt chia sẻ|chia sẻ|shares?)$/i.test(textOf(n))) add(n); });
-    }
-    return out;
-  };
-  var openList = async function (triggers, k) {
-    for (var i = 0; i < triggers.length && i < 4; i++) {
-      var before = visibleDialogs();
-      // Cuộn trigger vào tầm nhìn trước khi click
-      triggers[i].scrollIntoView({ block: 'center', behavior: 'instant' });
-      await sleep(300);
-      triggers[i].click();
-      // Đợi lâu hơn (25 lần × 500ms = 12.5s) vì Facebook load dialog chậm
-      for (var t = 0; t < 25; t++) {
-        await sleep(500);
-        var now = visibleDialogs().filter(function (d) { return before.indexOf(d) < 0; });
-        var hit = now.filter(function (d) { return listKindOf(d) === k; })[0] || now[0];
-        if (hit) {
-          // Đợi thêm cho nội dung dialog load xong
-          await sleep(2000);
-          if (k === 'like') {
-            // Nếu khung đang lọc 1 loại cảm xúc → chuyển sang tab "Tất cả"
-            var all = Array.prototype.filter.call(hit.querySelectorAll('[role="tab"]'), function (tb) { return /^(tất cả|all)(\s|$|\d)/i.test(textOf(tb)); })[0];
-            if (all && all.getAttribute('aria-selected') !== 'true') { all.click(); await sleep(2000); }
-          }
-          return hit;
-        }
-      }
-    }
-    return null;
-  };
-  var debugLabels = function (el) {
-    return Array.prototype.map.call(el.querySelectorAll('[aria-label]'), function (n) { return (n.getAttribute('aria-label') || '').trim(); })
-      .filter(function (t) { return /\d/.test(t) && t.length < 60; }).slice(0, 8).join(' | ');
-  };
   var closeDialog = async function (d) {
     var b = d.querySelector('[aria-label="Đóng"],[aria-label="Close"]');
     if (b) b.click(); else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
@@ -348,42 +290,29 @@ window.fbHelper = function fbHelper(site, opts) {
   var post = location.href.split('#')[0];
   var LBL = { like: 'Cảm xúc', comment: 'Bình luận', share: 'Chia sẻ' };
 
-  // Mã bài viết lấy từ URL (pfbid…, /posts/123, story_fbid=…)
-  var postIdOf = function (u) {
-    var m = String(u || '').match(/(pfbid[0-9A-Za-z]+)|\/posts\/(\d+)|story_fbid=(\d+)|\/permalink\/(\d+)|[?&]fbid=(\d+)|\/videos\/(\d+)|\/reel\/(\d+)/);
-    return m ? m.slice(1).filter(Boolean)[0] : '';
+  var isReactDialog = function (d) {
+    if (listKindOf(d) === 'like') return true;
+    return Array.prototype.some.call(d.querySelectorAll('[role="tab"]'), function (tb) { return /^(tất cả|all)(\s|$|\d)/i.test(textOf(tb)); });
   };
-  var POSTHEAD = /bài viết|'s post|\bpost\b/i;
-  var rootName = function (r) {
-    if (!r || r === document) return '(cả trang)';
-    var h = headOf(r).trim();
-    return h ? h.slice(0, 60) : (r.getAttribute('role') === 'main' ? '(vùng chính của trang)' : '(khối bài viết)');
-  };
-  // Tìm đúng bài viết cần quét. Đợi tối đa ~12s vì khung bài viết thường hiện SAU bảng feed.
-  var findPostRoot = async function () {
-    var pid = postIdOf(location.href);
-    for (var t = 0; t < 24; t++) {
-      // 1) Khung bài viết ("Bài viết của …") đè lên feed
-      var pd = visibleDialogs().filter(function (d) { return !listKindOf(d) && POSTHEAD.test(headOf(d)); });
-      if (pd.length) return pd[pd.length - 1];
-      // 2) Link mang mã bài viết (thời gian đăng) → leo lên khối chứa nút cảm xúc
-      if (pid) {
-        var as = Array.prototype.filter.call(document.querySelectorAll('a[href*="' + pid + '"]'), function (a) { return a.getClientRects().length && !a.closest('[role="article"][aria-label]'); });
-        for (var i = 0; i < as.length; i++) {
-          var dd = as[i].closest('[role="dialog"]');
-          if (dd && !listKindOf(dd)) return dd;
-          var up = as[i].parentElement;
-          for (var lv = 0; lv < 30 && up && up !== document.body; lv++, up = up.parentElement) {
-            if (up.getAttribute('role') === 'main') break;
-            if (findTriggers(up, 'like').length) return up;
-          }
-        }
-      }
-      await sleep(500);
-    }
-    // 3) Không xác định được: chỉ có 1 khung không phải danh sách → dùng nó, còn không thì vùng chính
-    var other = visibleDialogs().filter(function (d) { return !listKindOf(d); });
-    return other.length ? other[other.length - 1] : (document.querySelector('[role="main"]') || document);
+  // Chờ NGƯỜI DÙNG bấm vào số lượt cảm xúc của đúng bài → trả về khung danh sách + chỗ đã bấm
+  var waitReactClick = function () {
+    return new Promise(function (resolve) {
+      var lastClick = null, skipped = false;
+      var before = visibleDialogs();
+      var onClick = function (e) { if (!box.contains(e.target)) lastClick = e.target; };
+      document.addEventListener('click', onClick, true);
+      var sk = document.createElement('button');
+      sk.textContent = 'Bài chưa có cảm xúc → bỏ qua';
+      sk.style.cssText = 'margin-top:6px;padding:6px 10px;border-radius:6px;border:0;cursor:pointer;display:block';
+      sk.onclick = function () { skipped = true; };
+      box.appendChild(sk);
+      var iv = setInterval(function () {
+        if (stop || skipped) return done(null);
+        var d = visibleDialogs().filter(function (x) { return before.indexOf(x) < 0 && isReactDialog(x); })[0];
+        if (d) done({ dialog: d, target: lastClick });
+      }, 400);
+      function done(r) { clearInterval(iv); document.removeEventListener('click', onClick, true); sk.remove(); resolve(r); }
+    });
   };
 
   (async function () {
@@ -393,30 +322,28 @@ window.fbHelper = function fbHelper(site, opts) {
       finish({ kind: listKind, post: post, names: one }, 'Xong! ' + LBL[listKind] + ': ' + one.length + ' tên.');
       return;
     }
-    // Chế độ ĐẦY ĐỦ: bình luận + cảm xúc của ĐÚNG bài viết đang mở
     var lists = {}, missing = {};
-    msg('Đang tìm đúng bài viết…');
-    postRoot = await findPostRoot();
-    msg('Bài viết: ' + rootName(postRoot));
-    await sleep(800);
-    lists.comment = toArr(await expandComments(postRoot));
-    // expandComments đã cuộn xuống dưới → cuộn lại lên đầu bài (trong khung nếu có)
-    var sc0 = postRoot !== document && findScroller(postRoot);
-    if (sc0) sc0.scrollTop = 0;
-    if (postRoot.scrollIntoView) postRoot.scrollIntoView({ block: 'start', behavior: 'instant' });
-    await sleep(1500);
-    var reactRoot = postRoot;
-    for (var k of ['like']) { // share: thành viên tự nộp link, không quét
-      if (stop) break;
-      msg(LBL[k] + ': đang mở danh sách…');
-      var trigs = findTriggers(reactRoot, k);
-      if (!trigs.length) { missing[k] = 'không thấy nút ' + (k === 'like' ? 'số lượt cảm xúc' : 'số lượt chia sẻ') + ' (có thể bài chưa có ' + LBL[k].toLowerCase() + '). Nhãn thấy được: ' + debugLabels(postRoot); continue; }
-      var d = await openList(trigs, k);
-      if (!d) { missing[k] = 'đã thử bấm ' + trigs.length + ' chỗ nhưng không mở được khung danh sách. Nhãn thấy được: ' + debugLabels(postRoot); continue; }
-      lists[k] = toArr(await scrollList(d, LBL[k]));
+    box.style.background = '#e02424';
+    msg('👉 Bấm vào SỐ LƯỢT CẢM XÚC (👍❤️ + con số) ngay dưới bài viết cần quét. Tool sẽ tự cuộn lấy tên, rồi tự lấy bình luận.');
+    var got = await waitReactClick();
+    box.style.background = '#1a56db';
+    var target = got && got.target;
+    if (got) {
+      var d = got.dialog;
+      await sleep(1500);
+      var all = Array.prototype.filter.call(d.querySelectorAll('[role="tab"]'), function (tb) { return /^(tất cả|all)(\s|$|\d)/i.test(textOf(tb)); })[0];
+      if (all && all.getAttribute('aria-selected') !== 'true') { all.click(); await sleep(2000); }
+      lists.like = toArr(await scrollList(d, LBL.like));
       await closeDialog(d);
       await sleep(800);
+    } else {
+      lists.like = [];
+      missing.like = 'bỏ qua – không quét cảm xúc';
     }
+    // Bình luận: trong khung bài viết chứa nút vừa bấm; trang riêng thì vùng chính
+    var pd = target && target.closest && target.closest('[role="dialog"]');
+    var root = (pd && !isReactDialog(pd)) ? pd : (document.querySelector('[role="main"]') || document);
+    if (!stop) lists.comment = toArr(await expandComments(root));
     var sum = ['like', 'comment'].map(function (k) { return LBL[k] + ': ' + (lists[k] ? lists[k].length : '✗'); }).join(' · ');
     finish({ kind: 'all', post: post, lists: lists, missing: missing, names: [] }, 'Xong! ' + sum);
   })();
