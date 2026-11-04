@@ -11,7 +11,7 @@ window.fbHelper = function fbHelper(site) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v5</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v6</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -291,7 +291,7 @@ window.fbHelper = function fbHelper(site) {
     // Chế độ ĐẦY ĐỦ: bình luận + cảm xúc + chia sẻ của bài viết đang mở
     var lists = {}, missing = {};
     lists.comment = toArr(await expandComments(postRoot));
-    for (var k of ['like', 'share']) {
+    for (var k of ['like']) { // share: thành viên tự nộp link, không quét
       if (stop) break;
       msg(LBL[k] + ': đang mở danh sách…');
       var trigs = findTriggers(postRoot, k);
@@ -302,7 +302,7 @@ window.fbHelper = function fbHelper(site) {
       await closeDialog(d);
       await sleep(800);
     }
-    var sum = ['like', 'comment', 'share'].map(function (k) { return LBL[k] + ': ' + (lists[k] ? lists[k].length : '✗'); }).join(' · ');
+    var sum = ['like', 'comment'].map(function (k) { return LBL[k] + ': ' + (lists[k] ? lists[k].length : '✗'); }).join(' · ');
     finish({ kind: 'all', post: post, lists: lists, missing: missing, names: [] }, 'Xong! ' + sum);
   })();
 };

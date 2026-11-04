@@ -474,7 +474,14 @@
   const ACTIONS = { like: '👍 Like', comment: '💬 Comment', share: '⭐ Share' };
   const BONUS = ['share']; // không bắt buộc – cộng điểm thêm
   const checkOf = (cid, mid, action) => D().checks.find((x) => x.campaignId === cid && x.memberId === mid && x.action === action);
-  const actionDone = (cid, mid, action) => { const c = checkOf(cid, mid, action); return !!c && (c.verified === 'found' || (c.selfDone && c.verified !== 'not_found')); };
+  const LINKED = ['share']; // không quét – thành viên nộp link bài share
+  const actionDone = (cid, mid, action) => {
+    const c = checkOf(cid, mid, action);
+    if (!c) return false;
+    if (LINKED.includes(action)) return !!c.proofUrl && c.verified !== 'not_found';
+    return c.verified === 'found' || (c.selfDone && c.verified !== 'not_found');
+  };
+  const scanActs = (c) => c.actions.filter((a) => !LINKED.includes(a));
   const required = (c) => c.actions.filter((a) => !BONUS.includes(a));
   const memberDone = (c, mid) => required(c).every((a) => actionDone(c.id, mid, a));
   const participants = () => activeMembers().map((m) => m.id); // mặc định 100% thành viên tham gia
@@ -492,7 +499,14 @@
       <div class="seed-actions">${c.actions.map((a) => {
         const ch = checkOf(c.id, me().id, a) || {};
         const v = ch.verified === 'found' ? '<span class="badge ok">🟢 Đã thấy tên bạn</span>' : ch.verified === 'not_found' ? '<span class="badge danger">🔴 Chưa thấy tên bạn</span>' : '';
-        return `<div class="seed-act"><label class="check"><input type="checkbox" data-change="seed-self" data-cid="${esc(c.id)}" data-action="${a}" ${ch.selfDone ? 'checked' : ''}> ${ACTIONS[a]}${BONUS.includes(a) ? ' <span class="muted small">(không bắt buộc, cộng điểm)</span>' : ''}</label> ${v}
+        if (LINKED.includes(a)) {
+          const bad = ch.verified === 'not_found';
+          return `<div class="seed-act"><span>${ACTIONS[a]} <span class="muted small">(không bắt buộc, cộng điểm)</span></span>
+            ${ch.proofUrl ? (bad ? '<span class="badge danger">✗ Link không hợp lệ</span>' : '<span class="badge ok">✓ Đã nộp link</span>') : ''}
+            <div class="proof"><input placeholder="Dán link bài share của bạn (https://www.facebook.com/…)" value="${esc(ch.proofUrl || '')}" data-proof="${esc(c.id)}" aria-label="Link bài share">
+            <button class="btn small" data-act="seed-proof" data-cid="${esc(c.id)}">Lưu link</button></div></div>`;
+        }
+        return `<div class="seed-act"><label class="check"><input type="checkbox" data-change="seed-self" data-cid="${esc(c.id)}" data-action="${a}" ${ch.selfDone ? 'checked' : ''}> ${ACTIONS[a]}</label> ${v}
 </div>`;
       }).join('')}</div></div>`;
     const allCard = (c) => {
@@ -503,7 +517,10 @@
         <div class="bar ok seed-progress" data-tip="${done}/${total} người đã hoàn thành"><div style="width:${pct(done, total) || 0}%"></div><span>${done}/${total}</span></div>
         <button class="btn small" data-act="seed-detail" data-id="${esc(c.id)}">Chi tiết</button></div>`;
     };
-    return `<div class="page-head row"><div><h2>Seeding</h2><p class="muted">Like, comment, share bài fanpage. Tick khi bạn đã làm xong; trưởng ban đối chiếu với danh sách trên Facebook (share phải để chế độ <b>Công khai</b> mới hiện tên).</p></div>
+    const tabs = `<div class="subtabs"><button class="subtab ${state.seedTab !== 'stats' ? 'active' : ''}" data-act="seed-tab" data-tab="list">📋 Đợt seeding</button>
+      <button class="subtab ${state.seedTab === 'stats' ? 'active' : ''}" data-act="seed-tab" data-tab="stats">📊 Thống kê</button></div>`;
+    if (state.seedTab === 'stats') return tabs + viewSeedStats();
+    return tabs + `<div class="page-head row"><div><h2>Seeding</h2><p class="muted"><b>Like + Comment</b> bài fanpage là bắt buộc: tick khi đã làm, trưởng ban đối chiếu với danh sách trên Facebook. <b>⭐ Share</b> không bắt buộc (cộng điểm): dán link bài share của bạn.</p></div>
         <div class="actions"><button class="btn" data-act="my-fb">ⓕ Facebook của tôi${me().fbName || me().fbUrl ? '' : ' (chưa điền)'}</button>
         ${canSeed() ? '<button class="btn primary" data-act="seed-new">＋ Tạo đợt seeding</button>' : ''}</div></div>
       ${!me().fbName && !me().fbUrl && mine.length ? '<div class="banner"><div><b>ⓕ Điền tên Facebook của bạn</b><br><span class="small">Nếu tên Facebook khác tên thật (vd. "Dương Phan", biệt danh…), hãy điền để hệ thống nhận ra bạn khi đối chiếu.</span></div><button class="btn primary small" data-act="my-fb">Điền ngay</button></div>' : ''}
@@ -512,7 +529,7 @@
           <li>Bật thanh dấu trang: nhấn <b>Ctrl + Shift + B</b>.</li>
           <li><b>Kéo</b> nút này lên thanh dấu trang: <a class="btn primary small bm-link" href="${esc(bookmarkletHref())}" onclick="event.preventDefault();alert('Đừng bấm ở đây – hãy KÉO nút này lên thanh dấu trang, rồi bấm nó khi đang ở trên Facebook.');">📣 Gửi sang PCCV</a></li>
           <li>Trên Facebook: <b>mở bài viết</b> cần kiểm tra (không cần mở khung nào).</li>
-          <li>Bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang → nút tự mở hết bình luận, tự mở & cuộn danh sách <b>cảm xúc</b> và <b>chia sẻ</b> → bấm <b>"Mở PCCV để đối chiếu"</b> → chọn đợt → <b>Lưu tất cả</b>.</li>
+          <li>Bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang → nút tự mở hết bình luận, tự mở & cuộn danh sách <b>cảm xúc</b> → bấm <b>"Mở PCCV để đối chiếu"</b> → chọn đợt → <b>Lưu tất cả</b>.</li>
         </ol>
         <p class="muted small">Nút chỉ đọc khung danh sách bạn đang mở và cuộn với tốc độ như người dùng; không tự mở bài viết khác. Facebook đổi giao diện thì nút có thể cần cập nhật – khi đó vẫn dùng cách copy & dán.</p></details>` : ''}
       <section class="group"><h3>🙋 Việc seeding của tôi <span class="count">${myOpen.length} chưa xong</span></h3>
@@ -521,11 +538,92 @@
         ${list.length ? list.map(allCard).join('') : '<div class="empty">Chưa có đợt seeding nào.</div>'}</section>`;
   }
 
+  function seedStats(banId) {
+    const list = D().campaigns || [];
+    const ms = activeMembers().filter((m) => !banId || m.bans.some((b) => b.banId === banId));
+    return ms.map((m) => {
+      const r = { m, total: list.length, done: 0, like: 0, comment: 0, share: 0 };
+      list.forEach((c) => {
+        if (memberDone(c, m.id)) r.done++;
+        c.actions.forEach((a) => { if (actionDone(c.id, m.id, a)) r[a]++; });
+      });
+      r.rate = pct(r.done, r.total);
+      return r;
+    }).sort((x, y) => (y.rate ?? -1) - (x.rate ?? -1) || y.share - x.share || x.m.name.localeCompare(y.m.name, 'vi'));
+  }
+
+  function viewSeedStats() {
+    const list = D().campaigns || [];
+    const f = state.seedBan || '';
+    if (!canSeed()) {
+      const r = seedStats().find((x) => x.m.id === me().id);
+      return `<div class="page-head"><h2>Thống kê seeding của tôi</h2></div>
+        <div class="kpis">${r ? `<div class="kpi ${r.rate >= 80 ? 'ok' : r.rate >= 50 ? 'warn' : 'danger'}"><div class="kpi-val">${r.rate ?? '—'}${r.rate === null ? '' : '%'}</div><div class="kpi-label">Hoàn thành ${r.done}/${r.total} đợt</div></div>
+          <div class="kpi"><div class="kpi-val">${r.like}</div><div class="kpi-label">👍 Like</div></div><div class="kpi"><div class="kpi-val">${r.comment}</div><div class="kpi-label">💬 Comment</div></div>
+          <div class="kpi ok"><div class="kpi-val">${r.share}</div><div class="kpi-label">⭐ Share (cộng điểm)</div></div>` : ''}</div>`;
+    }
+    const rows = seedStats(f);
+    const avg = rows.length ? Math.round(rows.reduce((s, r) => s + (r.rate || 0), 0) / rows.length) : 0;
+    const shares = rows.reduce((s, r) => s + r.share, 0);
+    const full = rows.filter((r) => r.total && r.done === r.total).length;
+    const camp = list.map((c) => {
+      const ps = participants().filter((mid) => !f || (memberById(mid) || { bans: [] }).bans.some((b) => b.banId === f));
+      return { c, n: ps.length, done: ps.filter((mid) => memberDone(c, mid)).length,
+        like: ps.filter((mid) => actionDone(c.id, mid, 'like')).length, comment: ps.filter((mid) => actionDone(c.id, mid, 'comment')).length,
+        share: ps.filter((mid) => actionDone(c.id, mid, 'share')).length };
+    });
+    const rateBadge = (v) => (v === null ? '<span class="muted">—</span>' : `<span class="badge ${v >= 80 ? 'ok' : v >= 50 ? 'warn' : 'danger'}">${v}%</span>`);
+    return `<div class="page-head row"><div><h2>Thống kê seeding</h2><p class="muted">${list.length} đợt · hoàn thành = đủ 👍 Like + 💬 Comment · ⭐ Share tính riêng để cộng điểm.</p></div>
+        <div class="actions"><select data-seedban aria-label="Lọc theo Ban"><option value="">Tất cả các Ban</option>${D().bans.map((b) => `<option value="${esc(b.id)}" ${f === b.id ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select>
+        <button class="btn" data-act="seed-csv">⬇ Xuất Excel (CSV)</button></div></div>
+      <div class="kpis">
+        <div class="kpi"><div class="kpi-val">${avg}%</div><div class="kpi-label">Tỷ lệ hoàn thành trung bình</div></div>
+        <div class="kpi ok"><div class="kpi-val">${full}/${rows.length}</div><div class="kpi-label">Người hoàn thành 100% các đợt</div></div>
+        <div class="kpi ok"><div class="kpi-val">${shares}</div><div class="kpi-label">⭐ Tổng lượt share (cộng điểm)</div></div>
+      </div>
+      <div class="card"><h3>Theo thành viên</h3><div class="table-wrap"><table class="mini"><thead><tr><th>#</th><th>Thành viên</th><th>Hoàn thành</th><th>Tỷ lệ</th><th>👍 Like</th><th>💬 Comment</th><th>⭐ Share</th></tr></thead><tbody>
+        ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.m.name)}${fbLink(r.m)}<div class="muted small">${esc(r.m.bans.map((x) => (banById(x.banId) || {}).name).filter(Boolean).join(', '))}</div></td>
+          <td style="min-width:120px"><div class="bar ok" data-tip="${r.done}/${r.total} đợt"><div style="width:${pct(r.done, r.total) || 0}%"></div><span>${r.done}/${r.total}</span></div></td>
+          <td>${rateBadge(r.rate)}</td><td>${r.like}</td><td>${r.comment}</td><td>${r.share ? `<b>⭐ ${r.share}</b>` : '0'}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Chưa có dữ liệu.</td></tr>'}
+      </tbody></table></div></div>
+      <div class="card"><h3>Theo đợt</h3><div class="table-wrap"><table class="mini"><thead><tr><th>Đợt</th><th>Hoàn thành</th><th>👍 Like</th><th>💬 Comment</th><th>⭐ Share</th><th></th></tr></thead><tbody>
+        ${camp.map((x) => `<tr><td><b>${esc(x.c.title)}</b><div class="muted small">${x.c.deadline ? 'hạn ' + fmtDate(x.c.deadline, true) : ''}</div></td>
+          <td style="min-width:120px"><div class="bar ok"><div style="width:${pct(x.done, x.n) || 0}%"></div><span>${x.done}/${x.n}</span></div></td>
+          <td>${x.like}/${x.n}</td><td>${x.comment}/${x.n}</td><td>${x.share}</td>
+          <td><button class="btn ghost small" data-act="seed-detail" data-id="${esc(x.c.id)}">Chi tiết</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">Chưa có đợt nào.</td></tr>'}
+      </tbody></table></div></div>`;
+  }
+
+  function exportSeedCsv() {
+    const list = D().campaigns || [];
+    const head = ['Thành viên', 'Email', 'Ban', 'Số đợt', 'Hoàn thành', 'Tỷ lệ %', 'Like', 'Comment', 'Share (cộng điểm)'];
+    list.forEach((c) => head.push(c.title + ' – hoàn thành', c.title + ' – link share'));
+    const lines = [head];
+    seedStats(state.seedBan || '').forEach((r) => {
+      const row = [r.m.name, r.m.email, r.m.bans.map((x) => (banById(x.banId) || {}).name).filter(Boolean).join(', '), r.total, r.done, r.rate ?? '', r.like, r.comment, r.share];
+      list.forEach((c) => { const ch = checkOf(c.id, r.m.id, 'share') || {}; row.push(memberDone(c, r.m.id) ? 'x' : '', actionDone(c.id, r.m.id, 'share') ? ch.proofUrl : ''); });
+      lines.push(row);
+    });
+    const csv = '\ufeff' + lines.map((l) => l.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = `thong-ke-seeding-${todayIso()}.csv`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function openSeedDetail(c) {
     const lead = canSeed();
     const rows = participants().map(memberById).filter(Boolean).sort((a, b) => Number(memberDone(c, a.id)) - Number(memberDone(c, b.id)) || a.name.localeCompare(b.name, 'vi'));
     const cell = (m, a) => {
       const ch = checkOf(c.id, m.id, a) || {};
+      if (LINKED.includes(a)) {
+        if (!ch.proofUrl) return '<span class="muted small">—</span>';
+        const bad = ch.verified === 'not_found';
+        return `<a class="link" href="${esc(ch.proofUrl)}" target="_blank" rel="noopener">🔗 Xem bài share</a>
+          ${bad ? '<span class="badge danger">✗ Không hợp lệ</span>' : '<span class="badge ok">⭐</span>'}
+          ${lead ? `<button type="button" class="btn ghost small" data-act="share-valid" data-cid="${esc(c.id)}" data-mid="${esc(m.id)}" data-bad="${bad ? '0' : '1'}">${bad ? 'Đánh dấu hợp lệ' : 'Không hợp lệ'}</button>` : ''}`;
+      }
       let s = ch.verified === 'found' ? '<span class="badge ok">🟢 Có tên</span>' : ch.verified === 'not_found' ? '<span class="badge danger">🔴 Chưa thấy</span>' : '';
       if (ch.selfDone) s += ' <span class="badge" title="Thành viên tự xác nhận">✅ Tự báo</span>';
       if (a === 'share' && ch.proofUrl) s += ` <a class="link" href="${esc(ch.proofUrl)}" target="_blank" rel="noopener">🔗 bằng chứng</a>`;
@@ -536,7 +634,7 @@
       <div class="m-body">
         <p class="small">${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết trên Facebook ↗</a> · ` : ''}${c.deadline ? 'Hạn ' + fmtDate(c.deadline, true) : 'Không có hạn'}</p>
         ${lead ? `<div class="hint"><b>Đối chiếu:</b> mở bài trên Facebook → bấm vào số lượt cảm xúc / bình luận / chia sẻ → bôi đen cả danh sách tên → copy → bấm nút bên dưới và dán vào.
-          <div class="seed-verify-btns">${c.actions.map((a) => `<button class="btn small" data-act="seed-verify" data-id="${esc(c.id)}" data-action="${a}">📋 Đối chiếu ${ACTIONS[a]}</button>`).join('')}</div></div>` : ''}
+          <div class="seed-verify-btns">${scanActs(c).map((a) => `<button class="btn small" data-act="seed-verify" data-id="${esc(c.id)}" data-action="${a}">📋 Đối chiếu ${ACTIONS[a]}</button>`).join('')}</div></div>` : ''}
         <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${c.actions.map((a) => `<th>${ACTIONS[a]}${BONUS.includes(a) ? ' <span class="muted small">(+điểm)</span>' : ''}</th>`).join('')}<th>Hoàn thành</th></tr></thead><tbody>
           ${rows.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}${m.fbName ? `<div class="muted small">FB: ${esc(m.fbName)}</div>` : ''}</td>
             ${c.actions.map((a) => `<td>${cell(m, a)}</td>`).join('')}<td>${memberDone(c, m.id) ? '✔' : ''}</td></tr>`).join('')}
@@ -656,7 +754,7 @@
       <div class="m-body">
         <p class="small">Đã nhận <b>${total}</b> tên (<b>${esc(kindLabel)}</b>) từ <a href="${esc(p.post)}" target="_blank" rel="noopener">bài viết</a>.</p>
         <label>Đợt seeding<select name="cid">${list.map((c) => `<option value="${esc(c.id)}" ${c.id === guess.id ? 'selected' : ''}>${esc(c.title)}</option>`).join('')}</select></label>
-        <label class="${p.kind === 'all' ? 'hidden' : ''}">Loại<select name="action">${Object.keys(ACTIONS).map((a) => `<option value="${a}" ${a === p.kind ? 'selected' : ''}>${ACTIONS[a]}</option>`).join('')}</select></label>
+        <label class="${p.kind === 'all' ? 'hidden' : ''}">Loại<select name="action">${Object.keys(ACTIONS).filter((a) => !LINKED.includes(a)).map((a) => `<option value="${a}" ${a === p.kind ? 'selected' : ''}>${ACTIONS[a]}</option>`).join('')}</select></label>
       </div>
       <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary">Tiếp tục đối chiếu</button></div></footer></form>`);
     $('#imp-form').addEventListener('submit', (ev) => {
@@ -784,8 +882,8 @@
   /** Đối chiếu cùng lúc cảm xúc + bình luận + chia sẻ (từ chế độ đầy đủ của nút 📣). */
   function openSeedVerifyAll(c, p) {
     const ms = participants().map(memberById).filter(Boolean).sort((x, y) => x.name.localeCompare(y.name, 'vi'));
-    const acts = c.actions.filter((a) => p.lists[a]);
-    const skipped = c.actions.filter((a) => !p.lists[a]);
+    const acts = scanActs(c).filter((a) => p.lists[a]);
+    const skipped = scanActs(c).filter((a) => !p.lists[a]);
     const res = {};
     acts.forEach((a) => {
       const r = matchNames(p.lists[a].map((x) => x.name).join('\n'), ms, p.lists[a].map((x) => x.url));
@@ -796,8 +894,8 @@
       <div class="m-body">
         <div class="kpis small-kpis">${acts.map((a) => `<div class="kpi ok"><div class="kpi-val">${cnt(a)}/${ms.length}</div><div class="kpi-label">${ACTIONS[a]} – có tên (${p.lists[a].length} người trong danh sách)</div></div>`).join('')}</div>
         ${skipped.length ? `<p class="alert small">Chưa đối chiếu được: ${skipped.map((a) => `<b>${ACTIONS[a]}</b>${p.missing && p.missing[a] ? ' – ' + esc(p.missing[a]) : ''}`).join('; ')}. Có thể mở khung đó trên Facebook rồi bấm nút 📣 lần nữa, hoặc dùng "📋 Đối chiếu" trong Chi tiết đợt.</p>` : ''}
-        <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${c.actions.map((a) => `<th>${ACTIONS[a]}</th>`).join('')}</tr></thead><tbody>
-          ${ms.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}</td>${c.actions.map((a) => `<td>${res[a] ? (res[a].get(m.id) ? '<span class="badge ok">🟢 Có tên</span>' : '<span class="badge danger">🔴 Chưa thấy</span>') : '<span class="muted small">—</span>'}</td>`).join('')}</tr>`).join('')}
+        <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${scanActs(c).map((a) => `<th>${ACTIONS[a]}</th>`).join('')}</tr></thead><tbody>
+          ${ms.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}</td>${scanActs(c).map((a) => `<td>${res[a] ? (res[a].get(m.id) ? '<span class="badge ok">🟢 Có tên</span>' : '<span class="badge danger">🔴 Chưa thấy</span>') : '<span class="muted small">—</span>'}</td>`).join('')}</tr>`).join('')}
         </tbody></table></div>
       </div>
       <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="vall-btn" ${acts.length ? '' : 'disabled'}>Lưu tất cả</button></div></footer></form>`);
@@ -1359,6 +1457,16 @@
     'seed-detail': (el) => openSeedDetail(D().campaigns.find((c) => c.id === el.dataset.id)),
     'seed-edit': (el) => openSeedForm(D().campaigns.find((c) => c.id === el.dataset.id)),
     'seed-verify': (el) => openSeedVerify(D().campaigns.find((c) => c.id === el.dataset.id), el.dataset.action),
+    'seed-tab': (el) => { state.seedTab = el.dataset.tab; renderMain(); },
+    'seed-csv': () => exportSeedCsv(),
+    'share-valid': async (el) => {
+      const c = D().campaigns.find((x) => x.id === el.dataset.cid);
+      await run(async () => {
+        const saved = await S.verifyChecks(c.id, 'share', [{ memberId: el.dataset.mid, verified: el.dataset.bad === '1' ? 'not_found' : 'found' }]);
+        saved.forEach((x) => { const i = D().checks.findIndex((y) => y.campaignId === x.campaignId && y.memberId === x.memberId && y.action === x.action); if (i >= 0) D().checks[i] = x; else D().checks.push(x); });
+        renderMain(); openSeedDetail(c);
+      }, el);
+    },
     'seed-delete': async (el) => {
       const c = D().campaigns.find((x) => x.id === el.dataset.id);
       if (!confirm(`Xóa đợt seeding "${c.title}"?`)) return;
@@ -1368,7 +1476,7 @@
       const cid = el.dataset.cid;
       const input = $(`[data-proof="${CSS.escape(cid)}"]`);
       const url = input.value.trim();
-      if (url && !/^https?:\/\//i.test(url)) return toast('Link phải bắt đầu bằng https://', 'error');
+      if (url && !/^https?:\/\/(www\.|m\.|web\.)?(facebook\.com|fb\.com|fb\.watch)\//i.test(url)) return toast('Hãy dán link bài share trên Facebook (https://www.facebook.com/…)', 'error');
       const cur = checkOf(cid, me().id, 'share') || {};
       await run(async () => { await saveMyCheck(cid, 'share', url ? true : !!cur.selfDone, url); toast('Đã lưu link.'); }, el);
     },
@@ -1435,6 +1543,8 @@
     } else if (el.dataset.filter && el.tagName === 'SELECT') {
       state.filters[$('#ban-body').dataset.ban][el.dataset.filter] = el.value;
       renderBanBody();
+    } else if (el.hasAttribute('data-seedban')) {
+      state.seedBan = el.value; renderMain();
     } else if (el.dataset.dash) {
       state.dash[el.dataset.dash] = el.value;
       renderMain();

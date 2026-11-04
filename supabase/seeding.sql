@@ -40,6 +40,9 @@ begin
     end if;
     if tg_op = 'INSERT' then
       new.verified := null; new.verified_at := null;
+    elsif new.proof_url is distinct from old.proof_url then
+      -- nộp link share mới → chờ admin/trưởng ban xem lại
+      new.verified := null; new.verified_at := null;
     elsif new.verified is distinct from old.verified or new.verified_at is distinct from old.verified_at then
       raise exception 'Chỉ admin hoặc trưởng ban mới được đối chiếu';
     end if;
