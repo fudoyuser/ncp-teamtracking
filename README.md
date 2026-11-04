@@ -60,7 +60,7 @@ GitHub Pages (giao diện)  ──►  Apps Script (máy chủ)  ──►  Goog
    - Để ở trạng thái **Testing**.
 4. **Credentials → Create credentials → OAuth client ID**:
    - Application type: **Web application**.
-   - **Authorized JavaScript origins**: `https://TEN-GITHUB.github.io` (không có dấu `/` cuối, không có tên repo).
+   - **Authorized JavaScript origins**: `https://fudoyuser.github.io` (không có dấu `/` cuối, không có tên repo).
    - Tạo xong, copy **Client ID** dạng `123...apps.googleusercontent.com`.
 
 > Ở chế độ Testing, Google báo quyền hết hạn sau 7 ngày. Website **không bị ảnh hưởng**: đăng nhập chỉ dùng token 1 giờ, và bộ lọc Gmail tạo một lần là còn mãi.
@@ -71,7 +71,7 @@ GitHub Pages (giao diện)  ──►  Apps Script (máy chủ)  ──►  Goog
 
 ```js
 GOOGLE_CLIENT_ID: '123...apps.googleusercontent.com',
-WEBSITE_URL: 'https://TEN-GITHUB.github.io/ncp-teamtracking/',
+WEBSITE_URL: 'https://fudoyuser.github.io/ncp-teamtracking/',
 ADMIN_EMAILS: ['phandangduonga.ncp@gmail.com'],
 ```
 
@@ -97,7 +97,7 @@ ADMIN_EMAILS: ['phandangduonga.ncp@gmail.com'],
    ```
 3. Tải toàn bộ thư mục lên repo (**Add file → Upload files**, kéo cả thư mục `docs` và `apps-script`).
 4. **Settings → Pages → Source: Deploy from a branch → Branch: `main`, thư mục `/docs`** → Save.
-5. Sau 1–2 phút, website chạy tại `https://TEN-GITHUB.github.io/ncp-teamtracking/`.
+5. Sau 1–2 phút, website chạy tại `https://fudoyuser.github.io/ncp-teamtracking/`.
 
 > Repo public chỉ chứa code, **không chứa dữ liệu**: dữ liệu nằm trong Google Sheet riêng của bạn. Client ID và URL Web app không phải mật khẩu nên để công khai được.
 

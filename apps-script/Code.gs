@@ -13,7 +13,7 @@ const CONFIG = {
   // Client ID tạo trong Google Cloud Console (giống hệt giá trị trong docs/config.js)
   GOOGLE_CLIENT_ID: 'DAN_CLIENT_ID_VAO_DAY.apps.googleusercontent.com',
   // Địa chỉ website trên GitHub Pages (dùng cho link trong email)
-  WEBSITE_URL: 'https://TEN-GITHUB.github.io/ncp-teamtracking/',
+  WEBSITE_URL: 'https://fudoyuser.github.io/ncp-teamtracking/',
   // Để trống thì script tự lấy URL Web app đang deploy
   WEBAPP_URL: '',
 
