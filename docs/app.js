@@ -684,7 +684,9 @@
     openModal(`<div class="wide">${modalHead('ⓕ Cập nhật tên Facebook', `${done}/${list.length} người đã đầy đủ`)}
       <div class="m-body">
         <div class="hint"><b>⚡ Cách nhanh – cập nhật cả ${list.filter((m) => m.fbUrl).length} người một lần:</b>
-          <ol class="small"><li>Bấm nút dưới đây → một tab Facebook mở ra.</li><li>Trên tab đó, bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang <b>một lần</b> rồi đợi khoảng 1–2 phút.</li>
+          <ol class="small"><li><b>Chưa cài nút?</b> Nhấn <b>Ctrl + Shift + B</b> để hiện thanh dấu trang, rồi <b>KÉO</b> nút này thả lên thanh dấu trang:
+            <a class="btn small bm-link" href="${esc(bookmarkletHref())}" onclick="event.preventDefault();alert('Đừng bấm – hãy KÉO nút này thả lên thanh dấu trang của Chrome.');">📣 Gửi sang PCCV</a></li>
+            <li>Bấm nút dưới đây → một tab Facebook mở ra.</li><li>Trên tab đó, bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang <b>một lần</b> rồi đợi khoảng 1–2 phút.</li>
           <li>Bấm <b>"Gửi kết quả về PCCV"</b> → kiểm tra rồi bấm <b>Lưu tất cả</b>.</li></ol>
           <button type="button" class="btn primary" data-act="fb-batch">⚡ Tự cập nhật tất cả</button></div>
         <p class="small"><b>Hoặc từng người:</b></p>
