@@ -126,9 +126,6 @@
         return this.loadTask(taskId);
       },
       async deleteTask(id) { await q(sb.from('tasks').delete().eq('id', id)); },
-      async cloneEvent(banId, fromEventId, toName, toDate, keepPeople, keepNotes) {
-        return q(sb.rpc('clone_event', { p_ban: banId, p_from: fromEventId, p_to_name: toName, p_to_date: toDate || null, p_keep_people: keepPeople, p_keep_notes: keepNotes }));
-      },
       async saveEvent(e) {
         const row = { name: e.name.trim(), event_date: e.date || null };
         const r = e.id ? await q(sb.from('events').update(row).eq('id', e.id).select().single()) : await q(sb.from('events').insert(row).select().single());
@@ -347,18 +344,6 @@
         return clone(row);
       },
       async deleteTask(id) { await wait(); db.tasks = db.tasks.filter((t) => t.id !== id); },
-      async cloneEvent(banId, fromEventId, toName, toDate, keepPeople, keepNotes) {
-        await wait();
-        if (!toName.trim()) throw err('Hãy nhập tên sự kiện mới.');
-        let ev = db.events.find((e) => e.name.toLowerCase() === toName.trim().toLowerCase());
-        if (ev && db.tasks.some((t) => t.banId === banId && t.eventId === ev.id)) throw err('Sự kiện này đã có công việc trong Ban.');
-        if (!ev) { ev = { id: uid(), name: toName.trim(), date: toDate || '' }; db.events.push(ev); }
-        const src = db.tasks.filter((t) => t.banId === banId && t.eventId === fromEventId);
-        src.forEach((s) => db.tasks.push({ id: uid(), banId, eventId: ev.id, name: s.name, status: 'todo', note: keepNotes ? s.note : '',
-          leadIds: keepPeople ? s.leadIds.slice() : [], links: [], doneAt: null, createdAt: new Date().toISOString(),
-          parts: s.parts.map((p) => ({ id: uid(), roleId: p.roleId, deadline: '', assigneeIds: keepPeople ? p.assigneeIds.slice() : [], status: 'todo', link: '' })) }));
-        return src.length;
-      },
       async saveEvent(e) {
         await wait();
         if (db.events.some((x) => x.id !== e.id && x.name.toLowerCase() === e.name.trim().toLowerCase())) throw err('Tên sự kiện đã tồn tại.');

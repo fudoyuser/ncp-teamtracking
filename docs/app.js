@@ -316,8 +316,7 @@
     const people = activeMembers().filter((m) => m.bans.some((x) => x.banId === banId));
     return `<div class="page-head row">
         <div><h2>${esc(b.name)}</h2><p class="muted">${b.roles.length > 1 ? 'Vai trò: ' + b.roles.map((r) => esc(r.label)).join(' · ') : ''}</p></div>
-        ${canManageBan(banId) ? `<div class="actions"><button class="btn" data-act="clone" data-ban="${esc(banId)}">⧉ Tạo sự kiện từ mẫu</button>
-          <button class="btn primary" data-act="new" data-ban="${esc(banId)}">＋ Thêm công việc</button></div>` : ''}
+        ${canManageBan(banId) ? `<div class="actions"><button class="btn primary" data-act="new" data-ban="${esc(banId)}">＋ Thêm công việc</button></div>` : ''}
       </div>
       <div class="filters">
         <select data-filter="event" aria-label="Sự kiện"><option value="">Tất cả sự kiện</option>
@@ -511,36 +510,6 @@
       renderMain();
       if (relink.length) checkPartLinks(saved, relink);
     }, $('#save-btn'));
-  }
-
-  function openCloneModal(banId) {
-    const evIds = [...new Set(D().tasks.filter((t) => t.banId === banId && t.eventId).map((t) => t.eventId))];
-    const evs = eventsSorted().filter((e) => evIds.includes(e.id));
-    if (!evs.length) return toast('Ban này chưa có sự kiện nào để làm mẫu.', 'error');
-    openModal(`<form id="clone-form">${modalHead('Tạo sự kiện mới từ mẫu', banById(banId).name)}
-      <div class="m-body">
-        <p class="hint">Sao chép danh sách công việc của một sự kiện cũ sang sự kiện mới. Deadline, trạng thái và liên kết để trống.</p>
-        <label>Sự kiện mẫu<select name="from">${evs.map((e) => `<option value="${esc(e.id)}">${esc(e.name)}</option>`).join('')}</select></label>
-        <label>Tên sự kiện mới *<input name="to" required placeholder="VD: CHUYỆN NGHỀ KIỂM TOÁN" list="ev-names"></label>
-        <datalist id="ev-names">${D().events.map((e) => `<option value="${esc(e.name)}">`).join('')}</datalist>
-        <label>Ngày diễn ra<input name="date" type="date"></label>
-        <label class="check"><input type="checkbox" name="keepPeople" checked> Giữ nguyên người phụ trách</label>
-        <label class="check"><input type="checkbox" name="keepNotes" checked> Giữ nguyên ghi chú</label>
-      </div>
-      <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="clone-btn">Tạo sự kiện</button></div></footer></form>`);
-    $('#clone-form').addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const fd = new FormData(ev.target);
-      await run(async () => {
-        const n = await S.cloneEvent(banId, fd.get('from'), String(fd.get('to')).trim(), fd.get('date'), !!fd.get('keepPeople'), !!fd.get('keepNotes'));
-        closeModal();
-        toast(`Đã tạo ${n} công việc.`);
-        await loadData();
-        const created = D().events.find((e) => e.name.toLowerCase() === String(fd.get('to')).trim().toLowerCase());
-        state.filters[banId] = Object.assign(state.filters[banId] || {}, { event: created ? created.id : '', status: '' });
-        renderMain();
-      }, $('#clone-btn'));
-    });
   }
 
   /* ============================== Seeding ============================== */
@@ -1555,7 +1524,6 @@
     reload: () => loadData(),
     edit: (el) => openTaskModal(findTask(el.dataset.id)),
     new: (el) => openTaskModal(null, el.dataset.ban),
-    clone: (el) => openCloneModal(el.dataset.ban),
     close: () => closeModal(),
     'chip-x': (el) => el.closest('.chip').remove(),
     'link-add': () => $('#links').insertAdjacentHTML('beforeend', linkRow({ label: '', url: '' }, false)),
