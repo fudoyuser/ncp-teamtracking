@@ -148,6 +148,7 @@
       resendConfirm: (ids) => script('resendConfirm', { memberIds: ids || [] }),
       async markFilter() { await q(sb.rpc('mark_gmail_filter')); },
       async setMyFacebook(name, url) { await q(sb.rpc('set_my_facebook', { p_name: name, p_url: url })); },
+      async setMemberFacebook(id, name, url) { await q(sb.from('members').update({ fb_name: name, fb_url: url }).eq('id', id)); },
       async saveCampaign(c) {
         const row = { title: c.title, post_url: c.postUrl, actions: c.actions, deadline: c.deadline || null, member_ids: c.memberIds, ban_id: c.banId || null };
         const r = c.id ? await q(sb.from('seeding_campaigns').update(row).eq('id', c.id).select().single())
@@ -316,6 +317,7 @@
       },
       async updateMember(m) { await wait(); needAdmin(); Object.assign(db.members.find((x) => x.id === m.id), { name: m.name, isAdmin: m.isAdmin, bans: m.bans, fbName: m.fbName || '', fbUrl: m.fbUrl || '' }); },
       async setMyFacebook(name, url) { await wait(); Object.assign(me(), { fbName: name.trim(), fbUrl: url.trim() }); },
+      async setMemberFacebook(id, name, url) { await wait(); needAdmin(); Object.assign(db.members.find((x) => x.id === id), { fbName: name, fbUrl: url }); },
       async saveCampaign(c) {
         await wait();
         let row = db.campaigns.find((x) => x.id === c.id);

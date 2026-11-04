@@ -24,6 +24,28 @@ window.fbHelper = function fbHelper(site) {
   var head = dlg ? ((dlg.getAttribute('aria-label') || '') + ' ' + ((dlg.querySelector('h1,h2,[role="heading"]') || {}).textContent || '')).toLowerCase() : '';
   var kind = /chia sẻ|share/.test(head) ? 'share' : /cảm xúc|react|thích|like/.test(head) ? 'like' : 'comment';
 
+  // Chế độ TRANG CÁ NHÂN: không có khung danh sách, đường dẫn không phải bài viết → đọc tên + link thật
+  var isPost = /\/(posts|permalink|photo|photos|videos|reel|watch|story\.php|groups|share|events)\b|story_fbid|fbid=|pfbid/.test(location.pathname + location.search);
+  if (!dlg && !isPost) {
+    var h1 = Array.prototype.map.call(document.querySelectorAll('h1'), function (h) { return (h.innerText || h.textContent || '').trim().split('\n')[0].trim(); })
+      .filter(function (t) { return t && !/^(facebook|thông báo|notifications|bảng feed|feeds?|trang chủ|home)$/i.test(t); })[0] || '';
+    var seg = location.pathname.split('/').filter(Boolean)[0] || '';
+    var url = seg === 'profile.php' ? location.origin + '/profile.php?id=' + (new URLSearchParams(location.search).get('id') || '') : location.origin + '/' + seg;
+    if (h1 && seg) {
+      var pdata = btoa(unescape(encodeURIComponent(JSON.stringify({ kind: 'profile', name: h1, url: url, names: [] }))));
+      box.querySelector('[data-m]').textContent = 'Trang cá nhân: ' + h1;
+      var pb = box.querySelector('[data-stop]');
+      pb.textContent = '📨 Lưu tên này vào PCCV';
+      pb.onclick = function () { window.open(site + '#seed-import=' + pdata, 'pccv-import'); box.remove(); window.__pccvRunning = false; };
+      var px = document.createElement('button');
+      px.textContent = 'Đóng';
+      px.style.cssText = 'margin-left:6px;padding:6px 10px;border-radius:6px;border:0;cursor:pointer';
+      px.onclick = function () { box.remove(); window.__pccvRunning = false; };
+      pb.after(px);
+      return;
+    }
+  }
+
   var findScroller = function (el) {
     var best = null;
     var nodes = [el].concat(Array.prototype.slice.call(el.querySelectorAll('*')));
@@ -84,7 +106,7 @@ window.fbHelper = function fbHelper(site) {
     var btn = box.querySelector('[data-stop]');
     btn.textContent = '📨 Mở PCCV để đối chiếu';
     btn.onclick = function () {
-      window.open(site + '#seed-import=' + data, '_blank');
+      window.open(site + '#seed-import=' + data, 'pccv-import');
       box.remove();
       window.__pccvRunning = false;
     };
