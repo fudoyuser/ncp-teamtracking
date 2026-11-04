@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PCCV Seeding Scanner",
-  "version": "1.6",
+  "version": "1.7",
   "description": "Tự quét seeding Facebook cho PCCV – NEU Career Path Club",
   "permissions": ["storage", "tabs"],
   "background": {

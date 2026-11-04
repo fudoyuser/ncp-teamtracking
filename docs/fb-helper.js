@@ -22,7 +22,7 @@ window.fbHelper = function fbHelper(site, opts) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v11</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v12</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -357,6 +357,68 @@ window.fbHelper = function fbHelper(site, opts) {
     }
     return out.join(' < ');
   };
+  // 📸 Chụp cấu trúc khung đang mở → file .html nhỏ để người sửa lỗi thử code trên cấu trúc thật.
+  // Chỉ giữ thẻ, chữ, link (đã bỏ mã theo dõi), vai trò/nhãn trợ năng và vài thuộc tính bố cục; bỏ ảnh, script, class.
+  var KEEP = /^(role|aria-label|aria-selected|aria-hidden|aria-expanded|href|tabindex|dir|width|height|id)$/;
+  var cleanHref = function (h) {
+    try {
+      var u = new URL(h, location.origin);
+      var id = /profile\.php/.test(u.pathname) ? '?id=' + (u.searchParams.get('id') || '') : '';
+      return (u.origin === location.origin ? '' : u.origin) + u.pathname + id;
+    } catch (e) { return ''; }
+  };
+  var cleanTree = function (orig) {
+    var cl = orig.cloneNode(true);
+    var os = [orig].concat(Array.prototype.slice.call(orig.querySelectorAll('*')));
+    var cs = [cl].concat(Array.prototype.slice.call(cl.querySelectorAll('*')));
+    for (var i = 0; i < os.length && i < cs.length; i++) {
+      var o = os[i], c = cs[i], st = getComputedStyle(o), r = o.getBoundingClientRect();
+      var style = [];
+      if (/(auto|scroll)/.test(st.overflowY)) style.push('overflow-y:' + st.overflowY, 'height:' + Math.round(r.height) + 'px');
+      if (st.position === 'fixed' || st.position === 'absolute') style.push('position:' + st.position, 'left:' + Math.round(r.left) + 'px', 'top:' + Math.round(r.top) + 'px', 'width:' + Math.round(r.width) + 'px', 'height:' + Math.round(r.height) + 'px');
+      if (st.zIndex !== 'auto') style.push('z-index:' + st.zIndex);
+      if (st.display === 'contents' || st.display === 'none' || st.display === 'flex') style.push('display:' + st.display);
+      if (st.display === 'flex' && st.flexDirection !== 'row') style.push('flex-direction:' + st.flexDirection);
+      Array.prototype.slice.call(c.attributes).forEach(function (a) {
+        if (a.name === 'xlink:href' || (c.tagName.toLowerCase() === 'image' && a.name === 'href')) { c.setAttribute('href', 'data:,'); if (a.name !== 'href') c.removeAttribute(a.name); return; }
+        if (!KEEP.test(a.name)) c.removeAttribute(a.name);
+      });
+      if (c.tagName.toLowerCase() === 'img') c.setAttribute('src', 'data:,');
+      if (c.tagName.toLowerCase() === 'a' && c.hasAttribute('href')) c.setAttribute('href', cleanHref(o.getAttribute('href')));
+      if (style.length) c.setAttribute('style', style.join(';'));
+      if (o.getAttribute('role') || style.length) c.setAttribute('data-rect', Math.round(r.width) + 'x' + Math.round(r.height));
+    }
+    Array.prototype.forEach.call(cl.querySelectorAll('script,style,noscript,link,meta,iframe,video,canvas'), function (n) { n.remove(); });
+    return cl.outerHTML;
+  };
+  var takeSnapshot = function () {
+    var W = innerWidth, roots = [];
+    var pop = locatePopup();
+    if (pop) roots.push(['popup', pop]);
+    visibleDialogs().forEach(function (d, i) { if (d !== pop && !d.contains(box) && !(pop && d.contains(pop) && d.querySelector('[role="article"]'))) roots.push(['dialog' + i, d]); });
+    var el = document.elementFromPoint(W / 2, innerHeight / 2), top = el;
+    for (var up = el; up && up !== document.body; up = up.parentElement) { if (up.getBoundingClientRect().width > W * 0.95) break; top = up; }
+    if (top && !box.contains(top) && roots.every(function (r) { return r[1] !== top && !r[1].contains(top); })) roots.push(['center', top]);
+    var meta = {
+      tool: 'pccv-snapshot', ver: 'v12', when: new Date().toISOString(), page: location.origin + location.pathname,
+      viewport: W + 'x' + innerHeight, popupFound: !!pop, center: describeCenter(),
+      dialogs: visibleDialogs().map(function (d) { var r = d.getBoundingClientRect(); return { label: (d.getAttribute('aria-label') || '').slice(0, 60), size: Math.round(r.width) + 'x' + Math.round(r.height), imgs: d.querySelectorAll('img,image').length, links: d.querySelectorAll('a[href]').length, tabs: d.querySelectorAll('[role="tab"]').length, articles: d.querySelectorAll('[role="article"]').length }; }),
+      diag: diag
+    };
+    // Khung cảm xúc để cuối → khi mở file nó nằm trên cùng như trên Facebook
+    roots.sort(function (x, y) { return (x[0] === 'popup') - (y[0] === 'popup'); });
+    var body = roots.map(function (r) { return '<section data-pccv-root="' + r[0] + '">\n' + cleanTree(r[1]) + '\n</section>'; }).join('\n');
+    if (body.length > 4000000) body = body.slice(0, 4000000) + '<!-- cắt bớt -->';
+    var html = '<!doctype html><meta charset="utf-8"><title>PCCV snapshot</title>\n<script type="application/json" id="pccv-meta">' +
+      JSON.stringify(meta, null, 1).replace(/</g, '\\u003c') + '</script>\n' + body;
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    a.download = 'pccv-chup-khung-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.html';
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+    return { roots: roots.map(function (r) { return r[0]; }), size: html.length, popup: !!pop };
+  };
+
   // Chờ NGƯỜI DÙNG bấm vào số lượt cảm xúc của đúng bài → trả về khung danh sách + chỗ đã bấm
   var waitReactClick = function () {
     return new Promise(function (resolve) {
@@ -417,6 +479,16 @@ window.fbHelper = function fbHelper(site, opts) {
     }
     var lists = {}, missing = {};
     box.style.background = '#e02424';
+    var snapBtn = document.createElement('button');
+    snapBtn.textContent = '📸 Chụp cấu trúc khung (gửi người sửa lỗi)';
+    snapBtn.style.cssText = 'margin-top:6px;padding:6px 10px;border-radius:6px;border:0;cursor:pointer;display:block;width:100%;background:#fde68a';
+    snapBtn.onclick = function () {
+      try {
+        var r = takeSnapshot();
+        snapBtn.textContent = '✓ Đã tải file (' + Math.round(r.size / 1024) + ' KB, ' + (r.popup ? 'có' : 'KHÔNG thấy') + ' khung cảm xúc) – chụp lại';
+      } catch (e) { snapBtn.textContent = '⚠️ Lỗi chụp: ' + e.message; }
+    };
+    box.appendChild(snapBtn);
     msg('👉 Bấm vào SỐ LƯỢT CẢM XÚC (👍❤️ + con số) ngay dưới bài viết cần quét. Tool sẽ tự cuộn lấy tên, rồi tự lấy bình luận.');
     var got = await waitReactClick();
     box.style.background = '#1a56db';
