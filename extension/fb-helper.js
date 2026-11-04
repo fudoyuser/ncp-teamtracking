@@ -359,14 +359,41 @@ window.fbHelper = function fbHelper(site, opts) {
     var lists = {}, missing = {};
     lists.comment = toArr(await expandComments(postRoot));
     // Cuộn về đầu bài viết trước khi quét cảm xúc (expandComments đã cuộn xuống dưới)
-    window.scrollTo(0, 0);
+    // Cuộn đến chính postRoot thay vì đầu trang (tránh nhầm bài viết khác phía trên)
+    if (postRoot && postRoot.scrollIntoView) {
+      postRoot.scrollIntoView({ block: 'start', behavior: 'instant' });
+    } else {
+      window.scrollTo(0, 0);
+    }
     await sleep(1500);
-    // Cập nhật lại postRoot sau khi cuộn (DOM có thể thay đổi)
-    var freshPostRoot = document.querySelector('[role="main"]') || document;
+    // Tìm đúng bài viết chính để quét cảm xúc
+    // Ưu tiên: postRoot gốc (nếu là dialog thì chính xác nhất)
+    // Nếu postRoot là [role="main"], tìm article đầu tiên của bài viết (không phải bình luận)
+    var reactRoot = postRoot;
+    if (postRoot === document || (postRoot && !postRoot.closest('[role="dialog"]'))) {
+      // Tìm article chính của bài viết (không phải comment)
+      var articles = Array.prototype.filter.call(
+        (postRoot || document).querySelectorAll('[role="article"]'),
+        function (art) {
+          var label = (art.getAttribute('aria-label') || '').toLowerCase();
+          // Bỏ qua các article là bình luận
+          return !/^(bình luận|phản hồi|trả lời|comment|reply)\s/i.test(label);
+        }
+      );
+      // Lấy article đầu tiên (bài viết chính)
+      if (articles.length) {
+        // Article có thể lồng nhau — lấy cái ngoài cùng (chứa cả nội dung + thanh cảm xúc)
+        reactRoot = articles[0];
+        // Nhưng nút cảm xúc thường nằm NGOÀI article, trong parent container
+        // → mở rộng lên 1-2 cấp cha để bao gồm thanh reaction
+        var parent = reactRoot.parentElement;
+        if (parent) reactRoot = parent;
+      }
+    }
     for (var k of ['like']) { // share: thành viên tự nộp link, không quét
       if (stop) break;
       msg(LBL[k] + ': đang mở danh sách…');
-      var trigs = findTriggers(freshPostRoot, k);
+      var trigs = findTriggers(reactRoot, k);
       if (!trigs.length) { missing[k] = 'không thấy nút ' + (k === 'like' ? 'số lượt cảm xúc' : 'số lượt chia sẻ') + ' (có thể bài chưa có ' + LBL[k].toLowerCase() + '). Nhãn thấy được: ' + debugLabels(postRoot); continue; }
       var d = await openList(trigs, k);
       if (!d) { missing[k] = 'đã thử bấm ' + trigs.length + ' chỗ nhưng không mở được khung danh sách. Nhãn thấy được: ' + debugLabels(postRoot); continue; }
