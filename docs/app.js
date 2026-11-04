@@ -519,6 +519,7 @@
       return `<div class="card seed-row"><div class="seed-row-main"><b>${esc(c.title)}</b>
         <div class="muted small">Bắt buộc: ${required(c).map((a) => ACTIONS[a]).join(' + ')}${c.actions.includes('share') ? ` · ⭐ ${bonusCount(c)} người share` : ''}${c.deadline ? ' · hạn ' + fmtDate(c.deadline, true) : ''} · ${total} người</div></div>
         <div class="bar ok seed-progress" data-tip="${done}/${total} người đã hoàn thành"><div style="width:${pct(done, total) || 0}%"></div><span>${done}/${total}</span></div>
+        ${canSeed() && c.postUrl ? `<button class="btn small primary" data-act="seed-scan" data-id="${esc(c.id)}" title="Mở bài viết trên Facebook và quét ngay">▶ Quét</button>` : ''}
         <button class="btn small" data-act="seed-detail" data-id="${esc(c.id)}">Chi tiết</button></div>`;
     };
     const tabs = `<div class="subtabs"><button class="subtab ${state.seedTab !== 'stats' ? 'active' : ''}" data-act="seed-tab" data-tab="list">📋 Đợt seeding</button>
@@ -528,14 +529,13 @@
         <div class="actions"><button class="btn" data-act="my-fb">ⓕ Facebook của tôi${me().fbName || me().fbUrl ? '' : ' (chưa điền)'}</button>
         ${canSeed() ? '<button class="btn primary" data-act="seed-new">＋ Tạo đợt seeding</button>' : ''}</div></div>
       ${!me().fbName && !me().fbUrl && mine.length ? '<div class="banner"><div><b>ⓕ Điền tên Facebook của bạn</b><br><span class="small">Nếu tên Facebook khác tên thật (vd. "Dương Phan", biệt danh…), hãy điền để hệ thống nhận ra bạn khi đối chiếu.</span></div><button class="btn primary small" data-act="my-fb">Điền ngay</button></div>' : ''}
-      ${canSeed() && window.fbHelper ? `<details class="card bm-box"><summary><b>🔖 Nút "Gửi sang PCCV" – tự cuộn & lấy danh sách từ Facebook</b> <span class="muted small">(cài 1 lần, dùng trên Chrome máy tính)</span></summary>
+      ${canSeed() && window.fbHelper ? `<details class="card bm-box"><summary><b>🔖 Cài nút "Gửi sang PCCV" – dùng với nút ▶ Quét</b> <span class="muted small">(cài 1 lần trên Chrome máy tính)</span></summary>
         <ol class="small">
           <li>Bật thanh dấu trang: nhấn <b>Ctrl + Shift + B</b>.</li>
           <li><b>Kéo</b> nút này lên thanh dấu trang: <a class="btn primary small bm-link" href="${esc(bookmarkletHref())}" onclick="event.preventDefault();alert('Đừng bấm ở đây – hãy KÉO nút này lên thanh dấu trang, rồi bấm nó khi đang ở trên Facebook.');">📣 Gửi sang PCCV</a></li>
-          <li>Trên Facebook: <b>mở bài viết</b> cần kiểm tra (không cần mở khung nào).</li>
-          <li>Bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang → nút tự mở hết bình luận, tự mở & cuộn danh sách <b>cảm xúc</b> → bấm <b>"Mở PCCV để đối chiếu"</b> → chọn đợt → <b>Lưu tất cả</b>.</li>
         </ol>
-        <p class="muted small">Nút chỉ đọc khung danh sách bạn đang mở và cuộn với tốc độ như người dùng; không tự mở bài viết khác. Facebook đổi giao diện thì nút có thể cần cập nhật – khi đó vẫn dùng cách copy & dán.</p></details>` : ''}
+        <p class="small"><b>Cách dùng:</b> Bấm <b>▶ Quét</b> ở đợt seeding bên dưới → tab Facebook mở ra → bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang → đợi quét xong → bấm <b>"Mở PCCV để đối chiếu"</b> → hệ thống tự chọn đúng đợt → <b>Lưu tất cả</b>.</p>
+        <p class="muted small">Nút chỉ đọc danh sách bạn đang mở và cuộn với tốc độ bình thường; không tự mở bài viết khác.</p></details>` : ''}
       <section class="group"><h3>🙋 Việc seeding của tôi <span class="count">${myOpen.length} chưa xong</span></h3>
         ${mine.length ? mine.map(myCard).join('') : '<div class="empty">Bạn chưa có đợt seeding nào.</div>'}</section>
       <section class="group"><h3>📋 Tất cả đợt seeding <span class="count">${list.length}</span></h3>
@@ -668,7 +668,7 @@
       <div class="m-body">
         <p class="small">${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết trên Facebook ↗</a> · ` : ''}${c.deadline ? 'Hạn ' + fmtDate(c.deadline, true) : 'Không có hạn'}
           · Lần quét gần nhất: ${scanActs(c).map((a) => { const sc = latestScan(c.id, a); return ACTIONS[a] + ' ' + (sc ? new Date(sc.createdAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) + ` (${sc.names.length} tên)` : '<span class="badge warn">chưa lưu – cần quét lại</span>'); }).join(' · ')}</p>
-        ${lead ? `<div class="hint"><b>Đối chiếu:</b> mở bài trên Facebook → bấm vào số lượt cảm xúc / bình luận / chia sẻ → bôi đen cả danh sách tên → copy → bấm nút bên dưới và dán vào.
+        ${lead ? `<div class="hint">${c.postUrl ? `<button class="btn primary small" data-act="seed-scan" data-id="${esc(c.id)}">▶ Quét ngay</button> Mở bài viết và quét tự động (cần nút 📣 trên thanh dấu trang). Hoặc đối chiếu thủ công:` : '<b>Đối chiếu:</b> mở bài trên Facebook → bấm vào số lượt cảm xúc / bình luận / chia sẻ → bôi đen cả danh sách tên → copy → bấm nút bên dưới và dán vào.'}
           <div class="seed-verify-btns">${scanActs(c).map((a) => `<button class="btn small" data-act="seed-verify" data-id="${esc(c.id)}" data-action="${a}">📋 Đối chiếu ${ACTIONS[a]}</button>`).join('')}</div></div>` : ''}
         <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${c.actions.map((a) => `<th>${ACTIONS[a]}${BONUS.includes(a) ? ' <span class="muted small">(+điểm)</span>' : ''}</th>`).join('')}<th>Hoàn thành</th></tr></thead><tbody>
           ${rows.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}${m.fbName ? `<div class="muted small">FB: ${esc(m.fbName)}</div>` : ''}</td>
@@ -783,6 +783,16 @@
     if (!canSeed()) return toast('Chỉ admin hoặc trưởng ban mới đối chiếu được seeding.', 'error');
     const list = D().campaigns || [];
     if (!list.length) return toast('Chưa có đợt seeding nào – hãy tạo đợt trước rồi bấm lại nút trên Facebook.', 'error');
+    // Auto-match campaign khi có campaignId (từ nút "▶ Quét ngay")
+    if (p.campaignId) {
+      const c = list.find((x) => x.id === p.campaignId);
+      if (c) {
+        if (p.kind === 'all') return openSeedVerifyAll(c, p);
+        const action = scanActs(c)[0] || 'like';
+        if (!c.actions.includes(action)) return toast('Đợt này không yêu cầu ' + ACTIONS[action] + '.', 'error');
+        return openSeedVerify(c, action, p);
+      }
+    }
     const ids = fbIds(p.post);
     const guess = list.find((c) => c.postUrl && (normFb(c.postUrl) === normFb(p.post) || fbIds(c.postUrl).some((x) => ids.includes(x)))) || list[0];
     const kindLabel = p.kind === 'all' ? 'cảm xúc + bình luận + chia sẻ' : ({ like: 'cảm xúc', comment: 'bình luận', share: 'chia sẻ' }[p.kind] || p.kind);
@@ -1495,6 +1505,14 @@
       }, el);
     },
     'seed-new': () => openSeedForm(null),
+    'seed-scan': (el) => {
+      const c = (D().campaigns || []).find((x) => x.id === el.dataset.id);
+      if (!c || !c.postUrl) return toast('Đợt này chưa có link bài viết.', 'error');
+      const site = location.origin + location.pathname;
+      const hash = '#pccv-scan=' + encodeURIComponent(JSON.stringify({ cid: c.id, site, t: Date.now() }));
+      window.open(c.postUrl + hash, '_blank');
+      toast('Trên tab Facebook vừa mở, bấm nút 📣 Gửi sang PCCV trên thanh dấu trang. Kết quả sẽ tự trả về đây.');
+    },
     'seed-detail': (el) => openSeedDetail(D().campaigns.find((c) => c.id === el.dataset.id)),
     'seed-edit': (el) => openSeedForm(D().campaigns.find((c) => c.id === el.dataset.id)),
     'seed-verify': (el) => openSeedVerify(D().campaigns.find((c) => c.id === el.dataset.id), el.dataset.action),

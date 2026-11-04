@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "PCCV Seeding Scanner",
+  "version": "1.0",
+  "description": "Tự quét seeding Facebook cho PCCV – NEU Career Path Club",
+  "permissions": ["activeTab"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/*",
+        "https://m.facebook.com/*",
+        "https://web.facebook.com/*"
+      ],
+      "js": ["fb-helper.js", "content-fb.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://fudoyuser.github.io/ncp-teamtracking/*"
+      ],
+      "js": ["content-pccv.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

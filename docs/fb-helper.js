@@ -3,9 +3,20 @@
 // gom tên + link trang cá nhân, rồi cho người dùng bấm mở trang PCCV với danh sách đó.
 // Không tự mở bài viết khác, không gửi dữ liệu đi đâu ngoài trang PCCV của CLB.
 // Hàm này được chuyển thành chuỗi để làm bookmarklet nên KHÔNG được dùng biến bên ngoài.
-window.fbHelper = function fbHelper(site) {
+window.fbHelper = function fbHelper(site, opts) {
   if (window.__pccvRunning) return;
   window.__pccvRunning = true;
+  opts = opts || {};
+  var _campaignId = opts.campaignId || '';
+  try {
+    var _scanM = location.hash.match(/#pccv-scan=(.+)/);
+    if (_scanM) {
+      var _scan = JSON.parse(decodeURIComponent(_scanM[1]));
+      if (_scan.site) site = _scan.site;
+      if (_scan.cid) _campaignId = _scan.cid;
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  } catch(e) {}
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
   var JUNK = /^(thêm bạn bè|add friend|theo dõi|follow|đang theo dõi|following|nhắn tin|message|kết bạn|bạn bè|friends|xem thêm|see more|trả lời|reply|thích|like|chia sẻ|share|tất cả|all|bình luận|comment|xem bản dịch|see translation|\d.*)$/i;
   var box = document.createElement('div');
@@ -267,7 +278,14 @@ window.fbHelper = function fbHelper(site) {
     for (var t = 0; t < 10 && document.contains(d) && d.getClientRects().length; t++) await sleep(300);
   };
   var finish = function (payload, summary) {
+    if (_campaignId) payload.campaignId = _campaignId;
     var data = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    if (opts.onDone) {
+      msg(summary + ' – đang gửi về PCCV…');
+      try { opts.onDone(data); } catch(e) {}
+      setTimeout(function() { box.remove(); window.__pccvRunning = false; }, 2000);
+      return;
+    }
     msg(summary);
     var btn = box.querySelector('[data-stop]');
     btn.textContent = '📨 Mở PCCV để đối chiếu';
