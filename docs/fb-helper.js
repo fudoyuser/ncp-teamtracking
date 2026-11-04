@@ -107,8 +107,11 @@ window.fbHelper = function fbHelper(site) {
   // Chế độ TRANG CÁ NHÂN: không có khung danh sách, đường dẫn không phải bài viết → đọc tên + link thật
   var isPost = /\/(posts|permalink|photo|photos|videos|reel|watch|story\.php|groups|share|events)\b|story_fbid|fbid=|pfbid/.test(location.pathname + location.search);
   if (!dlg && !isPost) {
-    var h1 = Array.prototype.map.call(document.querySelectorAll('h1'), function (h) { return (h.innerText || h.textContent || '').trim().split('\n')[0].trim(); })
-      .filter(function (t) { return t && !/^(facebook|thông báo|notifications|bảng feed|feeds?|trang chủ|home)$/i.test(t); })[0] || '';
+    var JUNK1 = /^(facebook|thông báo|notifications|bảng feed|feeds?|trang chủ|home|đoạn chat|chats?|tin nhắn|messages?|messenger|bạn bè|friends|menu|marketplace|video|watch|nhóm|groups|trang|pages|tìm kiếm|search|đăng nhập|log in)$/i;
+    var t1 = String(document.title || '').replace(/^\(\d+\+?\)\s*/, '').replace(/\s*[|\-–]\s*Facebook\s*$/i, '').trim();
+    var main1 = document.querySelector('[role="main"]') || document;
+    var h1 = (t1 && !JUNK1.test(t1) && t1.length <= 70) ? t1 : (Array.prototype.map.call(main1.querySelectorAll('h1'), function (h) { return (h.innerText || h.textContent || '').trim().split('\n')[0].trim(); })
+      .filter(function (t) { return t && t.length <= 70 && !JUNK1.test(t); })[0] || '');
     var seg = location.pathname.split('/').filter(Boolean)[0] || '';
     var url = seg === 'profile.php' ? location.origin + '/profile.php?id=' + (new URLSearchParams(location.search).get('id') || '') : location.origin + '/' + seg;
     if (h1 && seg) {
