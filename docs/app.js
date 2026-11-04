@@ -59,7 +59,8 @@
   const isDone = (t) => t.status === 'done';
   // Trưởng ban và Phó ban cùng quyền quản lý Ban
   const isMgrLink = (b) => b.isLead || b.isVice;
-  const banRoleName = (m) => (m.isAdmin ? 'Admin' : m.bans.some((b) => b.isLead) ? 'Trưởng ban' : m.bans.some((b) => b.isVice) ? 'Phó ban' : 'Thành viên');
+  const banRoleName = (m) => (m.isAdmin ? 'Admin' : m.bans.some((b) => b.isLead) ? 'Trưởng ban' : m.bans.some((b) => b.isVice) ? 'Phó ban'
+    : m.bans.length && m.bans.every((b) => b.isCtv) ? 'Cộng tác viên' : 'Thành viên');
   const isLeadOfBan = (banId) => me().bans.some((b) => b.banId === banId && isMgrLink(b));
   const canManageBan = (banId) => me().isAdmin || isLeadOfBan(banId);
   const canCreateEvent = () => me().isAdmin || me().bans.some(isMgrLink);
@@ -406,7 +407,7 @@
     return `<div class="people" data-people="${esc(name)}">
       <span class="chips">${ids.map((id) => `<span class="chip" data-id="${esc(id)}">${esc(mName(id))}${disabled ? '' : '<button type="button" data-act="chip-x" aria-label="Bỏ">×</button>'}</span>`).join('')}</span>
       ${disabled ? '' : `<select data-change="chip-add" aria-label="Thêm người"><option value="">＋ Thêm người</option>
-        <optgroup label="${esc(banById(banId).name)}">${inBan.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</optgroup>
+        <optgroup label="${esc(banById(banId).name)}">${inBan.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.bans.some((x) => x.banId === banId && x.isCtv) ? ' (CTV)' : ''}</option>`).join('')}</optgroup>
         ${others.length ? `<optgroup label="Ban khác">${others.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</optgroup>` : ''}</select>`}</div>`;
   }
   const chipIds = (form, name) => { const box = form.querySelector(`[data-people="${CSS.escape(name)}"]`); return box ? $$('.chip', box).map((c) => c.dataset.id) : []; };
@@ -1234,7 +1235,7 @@
       <div class="table-wrap"><table class="tasks"><thead><tr><th>Thành viên</th><th>Ban</th><th>Quyền</th><th>Chống spam</th><th>Trạng thái</th><th></th></tr></thead><tbody>
       ${list.map((m) => { const c = CONFIRM[confirmOf(m.id)]; return `<tr class="${m.active ? '' : 'done'}">
         <td><b>${esc(m.name)}</b>${fbLink(m)}<div class="muted small">${esc(m.email)}</div></td>
-        <td>${m.bans.map((x) => { const b = banById(x.banId); return b ? `<span class="chip ${isMgrLink(x) ? 'me' : ''}">${x.isLead ? '★ ' : x.isVice ? '☆ ' : ''}${esc(b.name)}${x.isVice ? ' (phó)' : ''}</span>` : ''; }).join('') || '<span class="muted small">—</span>'}</td>
+        <td>${m.bans.map((x) => { const b = banById(x.banId); return b ? `<span class="chip ${isMgrLink(x) ? 'me' : ''}">${x.isLead ? '★ ' : x.isVice ? '☆ ' : ''}${esc(b.name)}${x.isVice ? ' (phó)' : x.isCtv ? ' (CTV)' : ''}</span>` : ''; }).join('') || '<span class="muted small">—</span>'}</td>
         <td>${m.isAdmin ? '<span class="badge ok">Admin</span>' : banRoleName(m) !== 'Thành viên' ? `<span class="badge">${banRoleName(m)}</span>` : '<span class="muted small">Thành viên</span>'}</td>
         <td>${m.userId ? `<span class="badge ${c[2]}">${c[0]} ${c[1]}</span>` : '<span class="muted small">—</span>'}</td>
         <td>${!m.active ? '<span class="badge muted">Đã khóa</span>' : !m.userId ? '<span class="badge warn">Chưa có đăng nhập</span>' : m.mustChange ? '<span class="badge warn">Chưa đổi mật khẩu</span>' : '<span class="badge ok">Hoạt động</span>'}</td>
@@ -1249,11 +1250,12 @@
     return `<div class="ban-picker">${D().bans.map((b) => { const s = selected.find((x) => x.banId === b.id); return `<div class="ban-pick">
       <label class="check"><input type="checkbox" name="ban" value="${esc(b.id)}" ${s ? 'checked' : ''}> ${esc(b.name)}</label>
       <select name="pos:${esc(b.id)}" aria-label="Chức vụ trong ${esc(b.name)}">
-        <option value="">Thành viên</option>
+        <option value="ctv" ${s && s.isCtv && !s.isLead && !s.isVice ? 'selected' : ''}>Cộng tác viên</option>
+        <option value="" ${!s || (!s.isCtv && !s.isLead && !s.isVice) ? 'selected' : ''}>Thành viên</option>
         <option value="vice" ${s && s.isVice && !s.isLead ? 'selected' : ''}>Phó ban</option>
         <option value="lead" ${s && s.isLead ? 'selected' : ''}>Trưởng ban</option></select></div>`; }).join('')}</div>`;
   }
-  const readBans = (fd) => fd.getAll('ban').map((id) => ({ banId: id, isLead: fd.get('pos:' + id) === 'lead', isVice: fd.get('pos:' + id) === 'vice' }));
+  const readBans = (fd) => fd.getAll('ban').map((id) => ({ banId: id, isLead: fd.get('pos:' + id) === 'lead', isVice: fd.get('pos:' + id) === 'vice', isCtv: fd.get('pos:' + id) === 'ctv' }));
 
   function openAccountModal() {
     openModal(`<form id="acct-form">${modalHead('Cấp tài khoản mới')}

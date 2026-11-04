@@ -40,6 +40,8 @@ create table if not exists public.member_bans (
 );
 -- Phó ban: cùng quyền quản lý Ban như Trưởng ban (giao việc, tạo/xóa việc, seeding)
 alter table public.member_bans add column if not exists is_vice boolean not null default false;
+-- Cộng tác viên: dưới Thành viên, quyền như Thành viên (nhận việc, cập nhật phần mình)
+alter table public.member_bans add column if not exists is_ctv boolean not null default false;
 
 create table if not exists public.events (
   id uuid primary key default gen_random_uuid(),

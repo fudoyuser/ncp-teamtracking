@@ -8,7 +8,7 @@
   const mapMember = (m, mbs) => ({
     id: m.id, userId: m.user_id, email: m.email, name: m.name, isAdmin: m.is_admin, active: m.active,
     mustChange: m.must_change_password, createdAt: m.created_at, fbName: m.fb_name || '', fbUrl: m.fb_url || '',
-    bans: mbs.filter((x) => x.member_id === m.id).map((x) => ({ banId: x.ban_id, isLead: x.is_lead, isVice: !!x.is_vice })),
+    bans: mbs.filter((x) => x.member_id === m.id).map((x) => ({ banId: x.ban_id, isLead: x.is_lead, isVice: !!x.is_vice, isCtv: !!x.is_ctv })),
   });
   const mapTask = (t, parts) => ({
     id: t.id, banId: t.ban_id, eventId: t.event_id, name: t.name, status: t.status, note: t.note || '',
@@ -147,7 +147,7 @@
       async updateMember(m) {
         await q(sb.from('members').update({ name: m.name, is_admin: m.isAdmin, fb_name: m.fbName || '', fb_url: m.fbUrl || '' }).eq('id', m.id));
         await q(sb.from('member_bans').delete().eq('member_id', m.id));
-        if (m.bans.length) await q(sb.from('member_bans').insert(m.bans.map((b) => ({ member_id: m.id, ban_id: b.banId, is_lead: !!b.isLead, is_vice: !b.isLead && !!b.isVice }))));
+        if (m.bans.length) await q(sb.from('member_bans').insert(m.bans.map((b) => ({ member_id: m.id, ban_id: b.banId, is_lead: !!b.isLead, is_vice: !b.isLead && !!b.isVice, is_ctv: !b.isLead && !b.isVice && !!b.isCtv }))));
       },
       createAccount: (m) => script('createAccount', m),
       grantLogin: (id) => script('grantLogin', { memberId: id }),
@@ -220,9 +220,9 @@
         ['m-huy', 'Vũ Đức Huy', 'huy@example.com', false, [['ban-sk', false]]],
         ['m-linh', 'Đỗ Khánh Linh', 'linh@example.com', false, [['ban-tt', false]]],
         ['m-bao', 'Hoàng Gia Bảo', 'bao@example.com', false, [['ban-tt', false, true]]],
-        ['m-mai', 'Bùi Mai Anh', 'maianh@example.com', false, [['ban-tt', false]]],
+        ['m-mai', 'Bùi Mai Anh', 'maianh@example.com', false, [['ban-tt', false, false, true]]],
         ['m-vy', 'Ngô Thảo Vy', 'vy@example.com', false, [['ban-sk', false]]],
-      ].map(([id, name, email, isAdmin, bans]) => ({ id, userId: 'u-' + id, email, name, isAdmin, active: true, mustChange: false, bans: bans.map(([banId, isLead, isVice]) => ({ banId, isLead, isVice: !!isVice })) })),
+      ].map(([id, name, email, isAdmin, bans]) => ({ id, userId: 'u-' + id, email, name, isAdmin, active: true, mustChange: false, bans: bans.map(([banId, isLead, isVice, isCtv]) => ({ banId, isLead, isVice: !!isVice, isCtv: !!isCtv })) })),
       events: [{ id: 'ev-1', name: 'CHUYỆN NGHỀ MARKETING', date: iso(4) }, { id: 'ev-0', name: 'CHUYỆN NGHỀ NGÂN HÀNG', date: iso(-24) }, { id: 'ev-2', name: 'CHUYỆN NGHỀ KIỂM TOÁN', date: iso(25) }],
       tasks: [],
       settings: { reminder_days: 1, overdue_max_days: 7, sender_email: 'nhacviec.demo@gmail.com' },

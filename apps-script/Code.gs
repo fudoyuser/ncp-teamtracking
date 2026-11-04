@@ -118,7 +118,7 @@ function createAccount_(p) {
   try {
     member = db_.insert('members', [{ user_id: user.id, email, name, is_admin: !!p.isAdmin, must_change_password: true }])[0];
     const bans = (p.bans || []).filter(b => b && b.banId);
-    if (bans.length) db_.insert('member_bans', bans.map(b => ({ member_id: member.id, ban_id: b.banId, is_lead: !!b.isLead, is_vice: !b.isLead && !!b.isVice })));
+    if (bans.length) db_.insert('member_bans', bans.map(b => ({ member_id: member.id, ban_id: b.banId, is_lead: !!b.isLead, is_vice: !b.isLead && !!b.isVice, is_ctv: !b.isLead && !b.isVice && !!b.isCtv })));
     db_.insert('email_confirm', [{ member_id: member.id }]);
   } catch (err) {
     authAdmin_('delete', '/users/' + user.id); // dọn dẹp nếu lỗi giữa chừng
