@@ -137,6 +137,7 @@
         if (m.bans.length) await q(sb.from('member_bans').insert(m.bans.map((b) => ({ member_id: m.id, ban_id: b.banId, is_lead: b.isLead }))));
       },
       createAccount: (m) => script('createAccount', m),
+      grantLogin: (id) => script('grantLogin', { memberId: id }),
       resetPassword: (id) => script('resetPassword', { memberId: id }),
       setActive: (id, active) => script('setActive', { memberId: id, active }),
       resendConfirm: (ids) => script('resendConfirm', { memberIds: ids || [] }),
@@ -290,6 +291,7 @@
         db.confirms[id] = { sends: 1, lastSent: new Date().toISOString(), clicked: false, replied: false, filter: false };
         return { memberId: id, password: genPw(), emailed: true };
       },
+      async grantLogin(id) { await wait(); needAdmin(); const m = db.members.find((x) => x.id === id); m.userId = 'u-' + id; m.mustChange = true; db.confirms[id] = { sends: 1, lastSent: new Date().toISOString() }; return { password: genPw(), emailed: true }; },
       async resetPassword(id) { await wait(); needAdmin(); db.members.find((x) => x.id === id).mustChange = true; return { password: genPw(), emailed: true }; },
       async setActive(id, active) { await wait(); needAdmin(); db.members.find((x) => x.id === id).active = active; },
       async resendConfirm() {

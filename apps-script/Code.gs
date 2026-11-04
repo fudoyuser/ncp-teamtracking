@@ -76,6 +76,7 @@ function route_(me, action, p) {
   const adminOnly = () => { if (!me.is_admin) throw fail_('FORBIDDEN', 'Chỉ admin mới làm được việc này.'); };
   switch (action) {
     case 'createAccount': adminOnly(); return withLock_(() => createAccount_(p));
+    case 'grantLogin': adminOnly(); return withLock_(() => grantLogin_(p.memberId));
     case 'resetPassword': adminOnly(); return withLock_(() => resetPassword_(p.memberId));
     case 'setActive': adminOnly(); return withLock_(() => setActive_(p.memberId, !!p.active));
     case 'resendConfirm': adminOnly(); return withLock_(() => ({ sent: resendConfirmNow_(p.memberIds) }));
@@ -105,9 +106,11 @@ function createAccount_(p) {
   const name = str_(p.name);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw fail_('INVALID', 'Email không hợp lệ.');
   if (!name) throw fail_('INVALID', 'Hãy nhập họ tên.');
-  if (db_.select('members', 'email=eq.' + enc_(email) + '&select=id').length) {
+  const existing = db_.select('members', 'email=eq.' + enc_(email) + '&select=*')[0];
+  if (existing && existing.user_id) {
     throw fail_('INVALID', 'Email ' + email + ' đã có tài khoản. Dùng "Đặt lại mật khẩu" nếu cần.');
   }
+  if (existing) return grantLogin_(existing.id); // đã có trong danh sách (vd. nhập từ Sheet) nhưng chưa có đăng nhập
   const password = genPassword_();
   const user = authAdmin_('post', '/users', { email, password, email_confirm: true });
   let member;
@@ -122,6 +125,21 @@ function createAccount_(p) {
   }
   const emailed = sendAccountEmail_(member, password, 'new');
   return { memberId: member.id, password, emailed };
+}
+
+/** Cấp đăng nhập cho thành viên đã có trong danh sách nhưng chưa có tài khoản (vd. nhập từ Google Sheet). */
+function grantLogin_(memberId) {
+  const m = getMember_(memberId);
+  if (m.user_id) throw fail_('INVALID', m.name + ' đã có tài khoản đăng nhập.');
+  if (MailApp.getRemainingDailyQuota() < 1) throw fail_('QUOTA', 'Đã hết hạn mức gửi mail hôm nay, thử lại vào ngày mai.');
+  const password = genPassword_();
+  const user = authAdmin_('post', '/users', { email: m.email, password, email_confirm: true });
+  try {
+    db_.update('members', 'id=eq.' + m.id, { user_id: user.id, must_change_password: true, active: true });
+  } catch (err) { authAdmin_('delete', '/users/' + user.id); throw err; }
+  m.user_id = user.id;
+  const emailed = sendAccountEmail_(m, password, 'new');
+  return { memberId: m.id, password, emailed };
 }
 
 function resetPassword_(memberId) {
@@ -207,7 +225,7 @@ function confirmStatus_(c) {
 
 /** Admin bấm "Gửi lại" trên Dashboard */
 function resendConfirmNow_(memberIds) {
-  const members = db_.select('members', 'active=is.true&select=*');
+  const members = db_.select('members', 'active=is.true&user_id=not.is.null&select=*');
   const confs = indexBy_(db_.select('email_confirm', 'select=*'), 'member_id');
   let n = 0;
   members.forEach(m => {
@@ -274,7 +292,7 @@ function checkReplies_() {
 }
 
 function processConfirmations_() {
-  const members = db_.select('members', 'active=is.true&select=*');
+  const members = db_.select('members', 'active=is.true&user_id=not.is.null&select=*');
   const confs = indexBy_(db_.select('email_confirm', 'select=*'), 'member_id');
   members.forEach(m => {
     const c = confs[m.id];
@@ -288,7 +306,7 @@ function processConfirmations_() {
 
 function loadAll_() {
   return {
-    members: db_.select('members', 'active=is.true&select=*'),
+    members: db_.select('members', 'active=is.true&user_id=not.is.null&select=*'),
     memberBans: db_.select('member_bans', 'select=*'),
     bans: db_.select('bans', 'select=*'),
     roles: db_.select('ban_roles', 'select=*'),

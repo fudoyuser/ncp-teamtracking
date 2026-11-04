@@ -623,11 +623,13 @@
     const q = nkey(state.acctQ);
     const list = D().members.filter((m) => !q || nkey(m.name + ' ' + m.email).includes(q))
       .sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name, 'vi'));
-    const unconfirmed = activeMembers().filter((m) => confirmOf(m.id) !== 'tin_cay').length;
+    const unconfirmed = activeMembers().filter((m) => m.userId && confirmOf(m.id) !== 'tin_cay').length;
+    const noLogin = activeMembers().filter((m) => !m.userId).length;
     const counts = {};
-    activeMembers().forEach((m) => { const s = confirmOf(m.id); counts[s] = (counts[s] || 0) + 1; });
+    activeMembers().filter((m) => m.userId).forEach((m) => { const s = confirmOf(m.id); counts[s] = (counts[s] || 0) + 1; });
     return `<div class="page-head row"><div><h2>Tài khoản</h2><p class="muted">${activeMembers().length} tài khoản đang hoạt động. Email gửi từ <b>${esc(D().settings.sender_email || '(chưa cài Apps Script)')}</b>.</p></div>
-      <div class="actions">${unconfirmed ? `<button class="btn" data-act="resend-all">📧 Gửi lại email xác nhận (${unconfirmed})</button>` : ''}
+      <div class="actions">${noLogin ? `<button class="btn" data-act="grant-all">🔑 Cấp đăng nhập cho ${noLogin} người chưa có</button>` : ''}
+        ${unconfirmed ? `<button class="btn" data-act="resend-all">📧 Gửi lại email xác nhận (${unconfirmed})</button>` : ''}
         <button class="btn primary" data-act="new-account">＋ Cấp tài khoản</button></div></div>
       <div class="kpis small-kpis">${Object.keys(CONFIRM).map((k) => `<div class="kpi ${CONFIRM[k][2]}"><div class="kpi-val">${counts[k] || 0}</div><div class="kpi-label">${CONFIRM[k][0]} ${CONFIRM[k][1]}</div></div>`).join('')}</div>
       <div class="filters"><input type="search" data-acct-q placeholder="Tìm theo tên hoặc email…" value="${esc(state.acctQ)}" aria-label="Tìm tài khoản"></div>
@@ -636,10 +638,11 @@
         <td><b>${esc(m.name)}</b><div class="muted small">${esc(m.email)}</div></td>
         <td>${m.bans.map((x) => { const b = banById(x.banId); return b ? `<span class="chip ${x.isLead ? 'me' : ''}">${x.isLead ? '★ ' : ''}${esc(b.name)}</span>` : ''; }).join('') || '<span class="muted small">—</span>'}</td>
         <td>${m.isAdmin ? '<span class="badge ok">Admin</span>' : m.bans.some((x) => x.isLead) ? '<span class="badge">Trưởng ban</span>' : '<span class="muted small">Thành viên</span>'}</td>
-        <td><span class="badge ${c[2]}">${c[0]} ${c[1]}</span></td>
-        <td>${m.active ? (m.mustChange ? '<span class="badge warn">Chưa đổi mật khẩu</span>' : '<span class="badge ok">Hoạt động</span>') : '<span class="badge muted">Đã khóa</span>'}</td>
+        <td>${m.userId ? `<span class="badge ${c[2]}">${c[0]} ${c[1]}</span>` : '<span class="muted small">—</span>'}</td>
+        <td>${!m.active ? '<span class="badge muted">Đã khóa</span>' : !m.userId ? '<span class="badge warn">Chưa có đăng nhập</span>' : m.mustChange ? '<span class="badge warn">Chưa đổi mật khẩu</span>' : '<span class="badge ok">Hoạt động</span>'}</td>
         <td class="row-actions"><button class="btn ghost small" data-act="edit-member" data-id="${esc(m.id)}">Sửa</button>
-          ${m.active ? `<button class="btn ghost small" data-act="reset-pw" data-id="${esc(m.id)}">Đặt lại MK</button>` : ''}
+          ${m.active && !m.userId ? `<button class="btn small primary" data-act="grant-login" data-id="${esc(m.id)}">Cấp đăng nhập</button>` : ''}
+          ${m.active && m.userId ? `<button class="btn ghost small" data-act="reset-pw" data-id="${esc(m.id)}">Đặt lại MK</button>` : ''}
           ${m.id !== me().id ? `<button class="btn ghost small" data-act="toggle-active" data-id="${esc(m.id)}">${m.active ? 'Khóa' : 'Mở khóa'}</button>` : ''}</td></tr>`; }).join('')}
       </tbody></table></div>`;
   }
@@ -911,6 +914,32 @@
       const m = memberById(el.dataset.id);
       if (!confirm(m.active ? `Khóa tài khoản ${m.name}? Người này sẽ không đăng nhập được và không nhận email nữa.` : `Mở khóa tài khoản ${m.name}?`)) return;
       await run(async () => { await S.setActive(m.id, !m.active); await refreshQuiet(); renderMain(); toast(m.active ? 'Đã khóa.' : 'Đã mở khóa.'); }, el);
+    },
+    'grant-login': async (el) => {
+      const m = memberById(el.dataset.id);
+      if (!confirm(`Cấp đăng nhập cho ${m.name}? Mật khẩu sẽ được gửi tới ${m.email}.`)) return;
+      await run(async () => { const r = await S.grantLogin(m.id); await refreshQuiet(); renderMain(); showPassword(m.name, m.email, r.password, r.emailed, 'Đã cấp đăng nhập'); }, el);
+    },
+    'grant-all': async (el) => {
+      const list = activeMembers().filter((m) => !m.userId);
+      if (!confirm(`Cấp đăng nhập và gửi email mật khẩu cho ${list.length} người?\n(Gmail gửi được khoảng 100 email/ngày.)`)) return;
+      el.disabled = true;
+      const results = [];
+      for (const [i, m] of list.entries()) {
+        el.textContent = `Đang cấp ${i + 1}/${list.length}…`;
+        try { const r = await S.grantLogin(m.id); results.push({ m, pw: r.password, emailed: r.emailed }); }
+        catch (e) { results.push({ m, error: e.message }); if (e.code === 'QUOTA') break; }
+      }
+      await refreshQuiet(); renderMain();
+      const ok = results.filter((r) => r.pw);
+      const all = ok.map((r) => `${r.m.name} | ${r.m.email} | ${r.pw}`).join('\n');
+      openModal(`<div>${modalHead(`Đã cấp đăng nhập cho ${ok.length}/${list.length} người`)}<div class="m-body">
+        <p class="small">Mỗi người đã nhận email chứa mật khẩu. Danh sách dưới đây chỉ hiện một lần – sao chép lại nếu cần gửi qua Zalo.</p>
+        <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th><th>Mật khẩu</th><th>Email</th></tr></thead><tbody>
+        ${results.map((r) => `<tr><td>${esc(r.m.name)}<div class="muted small">${esc(r.m.email)}</div></td><td>${r.pw ? `<code>${esc(r.pw)}</code>` : `<span class="badge danger">Lỗi</span> <span class="small">${esc(r.error)}</span>`}</td><td>${r.pw ? (r.emailed ? '✅ đã gửi' : '⚠ chưa gửi') : ''}</td></tr>`).join('')}
+        </tbody></table></div>
+        ${ok.length ? `<button class="btn small" data-act="copy-pw" data-text="${esc(all)}">📋 Sao chép toàn bộ danh sách</button>` : ''}</div>
+        <footer class="m-foot"><span></span><button class="btn primary" data-act="close">Xong</button></footer></div>`);
     },
     'resend-all': async (el) => {
       if (!confirm('Gửi lại email xác nhận cho tất cả người chưa xác nhận?')) return;
