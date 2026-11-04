@@ -354,10 +354,14 @@
       return true;
     });
     if (!list.length) { body.innerHTML = '<div class="empty">Không có công việc nào khớp bộ lọc.</div>'; return; }
+    // Sự kiện: ngày cũ → ngày mới; chưa có ngày / không thuộc sự kiện xếp cuối
     const order = [...new Set(list.map((t) => t.eventId || ''))].sort((x, y) => {
       const a = eventById(x), c = eventById(y);
-      return ((c && c.date) || '0').localeCompare((a && a.date) || '0');
+      return ((a && a.date) || '9999').localeCompare((c && c.date) || '9999') || ((a && a.name) || '~').localeCompare((c && c.name) || '~', 'vi');
     });
+    // Công việc trong sự kiện: hạn chót sớm nhất trước, chưa có hạn xếp cuối
+    const firstDl = (t) => t.parts.map((p) => p.deadline).filter(Boolean).sort()[0] || '9999';
+    list.sort((x, y) => firstDl(x).localeCompare(firstDl(y)));
     body.innerHTML = order.map((evId) => {
       const ev = eventById(evId);
       const rows = list.filter((t) => (t.eventId || '') === evId);
