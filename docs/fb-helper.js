@@ -1,0 +1,97 @@
+// Nút "Gửi sang PCCV" (bookmarklet) – chạy trên trang Facebook mà CHÍNH NGƯỜI DÙNG đang mở.
+// Việc nó làm: cuộn khung danh sách đang mở (cảm xúc / chia sẻ) hoặc bấm "Xem thêm bình luận",
+// gom tên + link trang cá nhân, rồi cho người dùng bấm mở trang PCCV với danh sách đó.
+// Không tự mở bài viết khác, không gửi dữ liệu đi đâu ngoài trang PCCV của CLB.
+// Hàm này được chuyển thành chuỗi để làm bookmarklet nên KHÔNG được dùng biến bên ngoài.
+window.fbHelper = function fbHelper(site) {
+  if (window.__pccvRunning) return;
+  window.__pccvRunning = true;
+  var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  var JUNK = /^(thêm bạn bè|add friend|theo dõi|follow|đang theo dõi|following|nhắn tin|message|kết bạn|bạn bè|friends|xem thêm|see more|trả lời|reply|thích|like|chia sẻ|share|tất cả|all|bình luận|comment|xem bản dịch|see translation|\d.*)$/i;
+  var box = document.createElement('div');
+  box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
+    'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+    '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
+  document.body.appendChild(box);
+  var stop = false;
+  box.querySelector('[data-stop]').onclick = function () { stop = true; };
+  var msg = function (t) { box.querySelector('[data-m]').textContent = t; };
+
+  var dialogs = Array.prototype.filter.call(document.querySelectorAll('[role="dialog"]'), function (d) { return d.getClientRects().length > 0; });
+  var dlg = dialogs.length ? dialogs[dialogs.length - 1] : null;
+  var root = dlg || document;
+  var head = dlg ? ((dlg.getAttribute('aria-label') || '') + ' ' + ((dlg.querySelector('h1,h2,[role="heading"]') || {}).textContent || '')).toLowerCase() : '';
+  var kind = /chia sẻ|share/.test(head) ? 'share' : /cảm xúc|react|thích|like/.test(head) ? 'like' : 'comment';
+
+  var findScroller = function (el) {
+    var best = null;
+    var nodes = [el].concat(Array.prototype.slice.call(el.querySelectorAll('*')));
+    nodes.forEach(function (n) {
+      var s = getComputedStyle(n);
+      if (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight + 20 && (!best || n.scrollHeight > best.scrollHeight)) best = n;
+    });
+    return best;
+  };
+  var cleanUrl = function (h) {
+    try {
+      var u = new URL(h, location.origin);
+      if (/profile\.php/.test(u.pathname)) return u.origin + u.pathname + '?id=' + (u.searchParams.get('id') || '');
+      return u.origin + u.pathname.replace(/\/$/, '');
+    } catch (e) { return ''; }
+  };
+  var collect = function () {
+    var out = {};
+    if (kind === 'comment') {
+      root.querySelectorAll('[role="article"][aria-label]').forEach(function (a) {
+        var m = a.getAttribute('aria-label').match(/^(?:bình luận (?:của|dưới tên)|phản hồi (?:của|dưới tên)|trả lời của|comment by|reply by)\s+(.+?)(?:\s+(?:vào|lúc|\d|cách đây|a |an ).*)?$/i);
+        if (m && !out[m[1].trim()]) out[m[1].trim()] = '';
+      });
+    }
+    root.querySelectorAll('a[href]').forEach(function (a) {
+      var t = (a.innerText || a.textContent || '').trim().split('\n')[0].trim();
+      if (!t || t.length < 2 || t.length > 60 || JUNK.test(t)) return;
+      var h = a.getAttribute('href') || '';
+      if (/\/(groups|pages|events|hashtag|photo|photos|watch|reel|stories|posts|videos)\b|comment_id=|\/ufi\//.test(h)) return;
+      if (kind === 'comment' && !a.closest('[role="article"]')) return;
+      if (!(t in out) || !out[t]) out[t] = cleanUrl(h);
+    });
+    return out;
+  };
+
+  (async function () {
+    var stable = 0, last = -1;
+    for (var i = 0; i < 400 && !stop; i++) {
+      if (kind === 'comment') {
+        var btns = Array.prototype.filter.call(root.querySelectorAll('[role="button"]'), function (b) {
+          return /^(xem thêm bình luận|xem thêm \d+ bình luận|xem các bình luận trước|xem \d+ phản hồi|xem tất cả \d+ phản hồi|view more comments|view \d+ more comments|view previous comments|view \d+ repl(y|ies)|view all \d+ replies)/i.test((b.innerText || '').trim());
+        });
+        btns.slice(0, 2).forEach(function (b) { b.click(); });
+        window.scrollBy(0, 500);
+      } else {
+        var sc = findScroller(dlg || document.body);
+        if (sc) sc.scrollTop = sc.scrollHeight; else window.scrollTo(0, document.body.scrollHeight);
+      }
+      await sleep(1100 + Math.random() * 900);
+      var n = Object.keys(collect()).length;
+      msg('Đang tự cuộn… đã thấy ' + n + ' tên');
+      if (n === last) { if (++stable >= 4) break; } else { stable = 0; last = n; }
+    }
+    var all = collect();
+    var names = Object.keys(all).map(function (k) { return { name: k, url: all[k] }; });
+    var data = btoa(unescape(encodeURIComponent(JSON.stringify({ kind: kind, post: location.href.split('#')[0], names: names }))));
+    msg('Xong! Tìm thấy ' + names.length + ' tên (' + (kind === 'like' ? 'cảm xúc' : kind === 'share' ? 'chia sẻ' : 'bình luận') + ').');
+    var btn = box.querySelector('[data-stop]');
+    btn.textContent = '📨 Mở PCCV để đối chiếu';
+    btn.onclick = function () {
+      window.open(site + '#seed-import=' + data, '_blank');
+      box.remove();
+      window.__pccvRunning = false;
+    };
+    var x = document.createElement('button');
+    x.textContent = 'Đóng';
+    x.style.cssText = 'margin-left:6px;padding:6px 10px;border-radius:6px;border:0;cursor:pointer';
+    x.onclick = function () { box.remove(); window.__pccvRunning = false; };
+    btn.after(x);
+  })();
+};

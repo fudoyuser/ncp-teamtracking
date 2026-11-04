@@ -258,3 +258,7 @@ dialog form, dialog > div { display: flex; flex-direction: column; max-height: c
 .fb-link { text-decoration: none; font-weight: 700; margin-left: 4px; }
 dialog:has(.wide) { width: min(900px, calc(100vw - 32px)); }
 #verify-form textarea { font-family: inherit; }
+
+.bm-box summary { cursor: pointer; }
+.bm-box ol { margin: 10px 0 6px; padding-left: 20px; display: grid; gap: 6px; }
+.bm-link { cursor: grab; }

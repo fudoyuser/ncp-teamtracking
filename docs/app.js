@@ -142,7 +142,13 @@
     try {
       state.data = await S.loadAll();
       if (!viewList().some((v) => v.id === state.view)) state.view = 'mine';
+      const pend = ss.get('seedImport');
+      if (pend) state.view = 'seeding';
       render();
+      if (pend) {
+        try { sessionStorage.removeItem('seedImport'); } catch (e) { /* bỏ qua */ }
+        try { openSeedImport(JSON.parse(decodeURIComponent(escape(atob(pend))))); } catch (e) { toast('Dữ liệu từ Facebook không đọc được.', 'error'); }
+      }
     } catch (e) {
       if (e.code === 'NOT_MEMBER') { await S.signOut(); return renderLogin(e.message); }
       $('#app').innerHTML = `<div class="loading"><p class="alert">${esc(e.message)}</p>
@@ -496,6 +502,14 @@
         <div class="actions"><button class="btn" data-act="my-fb">ⓕ Facebook của tôi${me().fbName || me().fbUrl ? '' : ' (chưa điền)'}</button>
         ${canSeed() ? '<button class="btn primary" data-act="seed-new">＋ Tạo đợt seeding</button>' : ''}</div></div>
       ${!me().fbName && !me().fbUrl && mine.length ? '<div class="banner"><div><b>ⓕ Điền tên Facebook của bạn</b><br><span class="small">Nếu tên Facebook khác tên thật (vd. "Dương Phan", biệt danh…), hãy điền để hệ thống nhận ra bạn khi đối chiếu.</span></div><button class="btn primary small" data-act="my-fb">Điền ngay</button></div>' : ''}
+      ${canSeed() && window.fbHelper ? `<details class="card bm-box"><summary><b>🔖 Nút "Gửi sang PCCV" – tự cuộn & lấy danh sách từ Facebook</b> <span class="muted small">(cài 1 lần, dùng trên Chrome máy tính)</span></summary>
+        <ol class="small">
+          <li>Bật thanh dấu trang: nhấn <b>Ctrl + Shift + B</b>.</li>
+          <li><b>Kéo</b> nút này lên thanh dấu trang: <a class="btn primary small bm-link" href="${esc(bookmarkletHref())}" onclick="event.preventDefault();alert('Đừng bấm ở đây – hãy KÉO nút này lên thanh dấu trang, rồi bấm nó khi đang ở trên Facebook.');">📣 Gửi sang PCCV</a></li>
+          <li>Trên Facebook: mở bài viết → bấm vào <b>số lượt cảm xúc</b> hoặc <b>số lượt chia sẻ</b> (để hiện khung danh sách). Với bình luận: chỉ cần mở bài viết.</li>
+          <li>Bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang → nút tự cuộn đến hết danh sách → bấm <b>"Mở PCCV để đối chiếu"</b>.</li>
+        </ol>
+        <p class="muted small">Nút chỉ đọc khung danh sách bạn đang mở và cuộn với tốc độ như người dùng; không tự mở bài viết khác. Facebook đổi giao diện thì nút có thể cần cập nhật – khi đó vẫn dùng cách copy & dán.</p></details>` : ''}
       <section class="group"><h3>🙋 Việc seeding của tôi <span class="count">${myOpen.length} chưa xong</span></h3>
         ${mine.length ? mine.map(myCard).join('') : '<div class="empty">Bạn chưa có đợt seeding nào.</div>'}</section>
       <section class="group"><h3>📋 Tất cả đợt seeding <span class="count">${list.length}</span></h3>
@@ -568,35 +582,41 @@
   }
 
   /** So danh sách tên copy từ Facebook với người tham gia (không phân biệt dấu; ưu tiên "tên Facebook" nếu có). */
-  function matchNames(text, members) {
+  const normFb = (u) => String(u || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^(www|m|web|mbasic)\./, '').replace(/\/+$/, '').replace(/[?&](?!id=)[^&]*/g, '');
+  function matchNames(text, members, urls) {
     const lines = String(text).split(/[\n\r]+/).map((l) => nkey(l.replace(/[^\p{L}\p{N}\s]/gu, ' '))).filter(Boolean);
     const blob = ' ' + lines.join(' | ') + ' ';
+    const urlSet = new Set((urls || []).map(normFb).filter(Boolean));
     return members.map((m) => {
       const cands = [m.fbName, m.name].filter(Boolean).map(nkey);
-      return { m, found: cands.some((k) => lines.includes(k) || blob.includes(' ' + k + ' ')) };
+      const byUrl = m.fbUrl && urlSet.has(normFb(m.fbUrl));
+      return { m, found: byUrl || cands.some((k) => lines.includes(k) || blob.includes(' ' + k + ' ')) };
     });
   }
 
-  function openSeedVerify(c, action) {
+  function openSeedVerify(c, action, prefill) {
     const ms = c.memberIds.map(memberById).filter(Boolean);
+    const urls = prefill ? prefill.names.map((x) => x.url) : [];
     openModal(`<form id="verify-form">${modalHead('Đối chiếu ' + ACTIONS[action], c.title)}
       <div class="m-body">
         <ol class="small"><li>Mở <a href="${esc(c.postUrl || '#')}" target="_blank" rel="noopener">bài viết</a> trên Facebook.</li>
           <li>Bấm vào <b>${action === 'like' ? 'số lượt cảm xúc' : action === 'comment' ? '"Xem thêm bình luận" cho đến hết' : 'số lượt chia sẻ'}</b>, cuộn xuống hết danh sách.</li>
           <li>Bôi đen toàn bộ danh sách (hoặc Ctrl+A trong khung đó) → Ctrl+C → dán vào ô dưới.</li></ol>
-        <textarea name="text" rows="8" placeholder="Dán danh sách tên vào đây…" required></textarea>
+        ${prefill ? `<p class="alert ok small">📣 Đã nhận ${prefill.names.length} tên từ nút "Gửi sang PCCV".</p>` : ''}
+        <textarea name="text" rows="8" placeholder="Dán danh sách tên vào đây…" required>${prefill ? esc(prefill.names.map((x) => x.name).join('\n')) : ''}</textarea>
         <div id="verify-preview"></div>
       </div>
       <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="verify-btn">Lưu kết quả</button></div></footer></form>`);
     const f = $('#verify-form');
     const preview = () => {
-      const res = matchNames(f.text.value, ms);
+      const res = matchNames(f.text.value, ms, urls);
       const found = res.filter((r) => r.found);
       $('#verify-preview').innerHTML = f.text.value.trim() ? `<p class="small"><b>🟢 Có tên: ${found.length}</b> · <b>🔴 Chưa thấy: ${res.length - found.length}</b></p>
         <div class="row-wrap">${res.map((r) => `<span class="chip ${r.found ? 'me' : 'unknown'}">${r.found ? '🟢' : '🔴'} ${esc(r.m.name)}</span>`).join('')}</div>` : '';
       return res;
     };
     f.text.addEventListener('input', preview);
+    if (prefill) preview();
     f.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const res = preview();
@@ -610,6 +630,35 @@
         renderMain(); openSeedDetail(c);
       }, $('#verify-btn'));
     });
+  }
+
+  const fbIds = (u) => (String(u || '').match(/\d{6,}|pfbid\w+/g) || []);
+  function openSeedImport(p) {
+    if (!canSeed()) return toast('Chỉ admin hoặc trưởng ban mới đối chiếu được seeding.', 'error');
+    const list = D().campaigns || [];
+    if (!list.length) return toast('Chưa có đợt seeding nào – hãy tạo đợt trước rồi bấm lại nút trên Facebook.', 'error');
+    const ids = fbIds(p.post);
+    const guess = list.find((c) => c.postUrl && (normFb(c.postUrl) === normFb(p.post) || fbIds(c.postUrl).some((x) => ids.includes(x)))) || list[0];
+    const kindLabel = { like: 'cảm xúc', comment: 'bình luận', share: 'chia sẻ' }[p.kind] || p.kind;
+    openModal(`<form id="imp-form">${modalHead('📣 Nhận danh sách từ Facebook')}
+      <div class="m-body">
+        <p class="small">Đã nhận <b>${p.names.length}</b> tên (danh sách <b>${esc(kindLabel)}</b>) từ <a href="${esc(p.post)}" target="_blank" rel="noopener">bài viết</a>.</p>
+        <label>Đợt seeding<select name="cid">${list.map((c) => `<option value="${esc(c.id)}" ${c.id === guess.id ? 'selected' : ''}>${esc(c.title)}</option>`).join('')}</select></label>
+        <label>Loại<select name="action">${Object.keys(ACTIONS).map((a) => `<option value="${a}" ${a === p.kind ? 'selected' : ''}>${ACTIONS[a]}</option>`).join('')}</select></label>
+      </div>
+      <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary">Tiếp tục đối chiếu</button></div></footer></form>`);
+    $('#imp-form').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const c = list.find((x) => x.id === ev.target.cid.value);
+      const action = ev.target.action.value;
+      if (!c.actions.includes(action)) return toast('Đợt này không yêu cầu ' + ACTIONS[action] + '.', 'error');
+      openSeedVerify(c, action, p);
+    });
+  }
+
+  function bookmarkletHref() {
+    const site = location.origin + location.pathname;
+    return 'javascript:(' + encodeURIComponent(window.fbHelper.toString()) + ')(' + encodeURIComponent(JSON.stringify(site)) + ')';
   }
 
   function openMyFb() {
@@ -1249,6 +1298,10 @@
   $('#modal').addEventListener('click', (ev) => { if (ev.target.id === 'modal') closeModal(); });
 
   /* ============================== khởi động ============================== */
+  if (location.hash.startsWith('#seed-import=')) {
+    ss.set('seedImport', location.hash.slice('#seed-import='.length));
+    history.replaceState(null, '', location.pathname + location.search);
+  }
   (async () => {
     try { if (await S.init()) await loadData(); else renderLogin(); } catch (e) { renderLogin(e.message); }
   })();
