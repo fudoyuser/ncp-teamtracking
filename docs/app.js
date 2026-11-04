@@ -1,54 +1,35 @@
 (() => {
   'use strict';
   const CFG = window.APP_CONFIG || {};
-  const DEMO = !CFG.API_URL;
-  const AUTH_ERRORS = ['AUTH_REQUIRED', 'AUTH_EXPIRED', 'AUTH_INVALID'];
+  const S = window.Store;
 
-  /* ---------------- helpers ---------------- */
+  /* ============================== helpers ============================== */
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const nkey = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[đĐ]/g, 'd').toLowerCase().replace(/\s+/g, ' ').trim();
-  const store = {
+  const ss = {
     get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
-    set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } },
-    del(k) { try { sessionStorage.removeItem(k); } catch (e) { /* ignore */ } },
+    set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* bỏ qua */ } },
   };
+  const STATUS = { todo: 'Chưa bắt đầu', doing: 'Đang làm', done: 'Hoàn thành' };
+  const pad = (n) => String(n).padStart(2, '0');
+  const localIso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const todayIso = () => localIso(new Date());
+  const isoToDate = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
   const daysUntil = (iso) => {
     if (!iso) return null;
-    const [y, m, d] = iso.split('-').map(Number);
     const now = new Date(); now.setHours(0, 0, 0, 0);
-    return Math.round((new Date(y, m - 1, d) - now) / 86400000);
+    return Math.round((isoToDate(iso) - now) / 86400000);
   };
-  const fmtDate = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}`; };
+  const fmtDate = (iso, full) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return full ? `${d}/${m}/${y}` : `${d}/${m}`; };
   const shortName = (n) => { const p = String(n).trim().split(/\s+/); return p.length > 2 ? p.slice(-2).join(' ') : n; };
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : null);
 
   const state = {
-    token: null, demoEmail: null, data: null,
-    view: store.get('view') || 'mine',
-    filters: {}, confirms: null,
+    data: null, view: ss.get('view') || 'mine', adminTab: ss.get('adminTab') || 'accounts',
+    filters: {}, dash: { ban: '', range: '90' }, acctQ: '',
   };
-
-  /* ---------------- API ---------------- */
-  async function api(action, payload = {}) {
-    if (DEMO) return window.DemoApi.call(action, payload, state.demoEmail);
-    let res;
-    try {
-      res = await fetch(CFG.API_URL, { method: 'POST', body: JSON.stringify({ action, token: state.token, payload }) });
-    } catch (e) { throw new Error('Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.'); }
-    if (!res.ok) throw new Error('Máy chủ lỗi (' + res.status + ').');
-    const j = await res.json();
-    if (!j.ok) { const e = new Error(j.message || j.error); e.code = j.error; throw e; }
-    return j.data;
-  }
-
-  async function run(fn, { busyEl } = {}) {
-    if (busyEl) busyEl.disabled = true;
-    try { return await fn(); } catch (e) {
-      if (AUTH_ERRORS.includes(e.code)) { logout('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'); return; }
-      toast(e.message || String(e), 'error');
-    } finally { if (busyEl) busyEl.disabled = false; }
-  }
 
   function toast(msg, type = 'ok') {
     const el = document.createElement('div');
@@ -59,139 +40,129 @@
     setTimeout(() => el.remove(), 4000);
   }
 
-  /* ---------------- auth ---------------- */
-  function jwtExp(t) {
-    try { return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000; } catch (e) { return 0; }
+  async function run(fn, btn) {
+    if (btn) btn.disabled = true;
+    try { return await fn(); } catch (e) {
+      if (['AUTH_EXPIRED', 'AUTH_REQUIRED', 'PGRST301'].includes(e.code)) { await S.signOut(); renderLogin('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'); return; }
+      toast(e.message || String(e), 'error');
+    } finally { if (btn) btn.disabled = false; }
   }
-  function waitForGoogle() {
-    return new Promise((resolve, reject) => {
-      let n = 0;
-      const tick = () => { if (window.google && google.accounts && google.accounts.id) resolve(); else if (++n > 100) reject(new Error('Không tải được Google Sign-In.')); else setTimeout(tick, 100); };
-      tick();
+
+  /* ============================== dữ liệu dẫn xuất ============================== */
+  const D = () => state.data;
+  const me = () => D().members.find((m) => m.id === D().meId);
+  const memberById = (id) => D().members.find((m) => m.id === id);
+  const banById = (id) => D().bans.find((b) => b.id === id);
+  const eventById = (id) => D().events.find((e) => e.id === id);
+  const roleById = (ban, id) => ban.roles.find((r) => r.id === id);
+  const mName = (id) => { const m = memberById(id); return m ? m.name : '(đã xóa)'; };
+  const isDone = (t) => t.status === 'done';
+  const isLeadOfBan = (banId) => me().bans.some((b) => b.banId === banId && b.isLead);
+  const canManageBan = (banId) => me().isAdmin || isLeadOfBan(banId);
+  const canCreateEvent = () => me().isAdmin || me().bans.some((b) => b.isLead);
+  const isTaskLead = (t) => t.leadIds.includes(me().id);
+  const isAssignee = (t) => t.parts.some((p) => p.assigneeIds.includes(me().id));
+  const canFull = (t) => canManageBan(t.banId) || isTaskLead(t);
+  const canEdit = (t) => canFull(t) || isAssignee(t);
+  const partFor = (t, roleId) => t.parts.find((p) => p.roleId === roleId) || { roleId, deadline: '', assigneeIds: [] };
+  const finalDeadline = (t) => t.parts.map((p) => p.deadline).filter(Boolean).sort().pop() || '';
+  const isLate = (t) => !isDone(t) && t.parts.some((p) => p.deadline && daysUntil(p.deadline) < 0);
+  const activeMembers = () => D().members.filter((m) => m.active);
+  const confirmOf = (mid) => {
+    const c = D().confirms[mid];
+    if (!c) return 'chua_gui';
+    if (c.filter || c.replied) return 'tin_cay';
+    if (!c.sends) return 'chua_gui';
+    return c.clicked ? 'da_bam' : 'da_gui';
+  };
+  const eventsSorted = () => [...D().events].sort((a, b) => (b.date || '0').localeCompare(a.date || '0') || a.name.localeCompare(b.name, 'vi'));
+
+  /* ============================== đăng nhập ============================== */
+  function renderLogin(message) {
+    $('#app').innerHTML = `
+      <div class="login"><form class="login-card" id="login-form">
+        <div class="logo">📋</div>
+        <h1>${esc(CFG.CLUB_NAME || 'TeamTracking')}</h1>
+        <p class="muted">Bảng phân công công việc (PCCV)</p>
+        ${message ? `<p class="alert">${esc(message)}</p>` : ''}
+        ${S.demo ? `
+          <p class="demo-note">Đang chạy <b>chế độ demo</b> với dữ liệu mẫu (tên giả). Chọn một người để đăng nhập thử:</p>
+          <select name="demo">${S.demoUsers.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.isAdmin ? ' – Admin' : m.bans.some((b) => b.isLead) ? ' – Trưởng ban' : ''}</option>`).join('')}</select>`
+        : `
+          <label>Email<input name="email" type="email" autocomplete="username" required></label>
+          <label>Mật khẩu<input name="password" type="password" autocomplete="current-password" required></label>`}
+        <button class="btn primary block" id="login-btn">Đăng nhập</button>
+        ${S.demo ? '' : '<p class="muted small">Chưa có tài khoản hoặc quên mật khẩu? Nhắn admin để được cấp / đặt lại.</p>'}
+      </form></div>`;
+    $('#login-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      await run(async () => {
+        if (S.demo) await S.signIn(fd.get('demo'));
+        else await S.signIn(fd.get('email'), fd.get('password'));
+        await loadData();
+      }, $('#login-btn'));
     });
   }
 
-  function renderLogin(message) {
-    $('#app').innerHTML = `
-      <div class="login">
-        <div class="login-card">
-          <div class="logo">📋</div>
-          <h1>${esc(CFG.CLUB_NAME || 'TeamTracking')}</h1>
-          <p class="muted">Bảng phân công công việc của team</p>
-          ${message ? `<p class="alert">${esc(message)}</p>` : ''}
-          ${DEMO ? `
-            <p class="demo-note">Đang chạy <b>chế độ demo</b> với dữ liệu mẫu. Chọn một người để đăng nhập thử:</p>
-            <select id="demo-user">${window.DemoApi.members.map((m) => `<option value="${esc(m.email)}">${esc(m.name)}${m.title ? ' – ' + esc(m.title) : ''}</option>`).join('')}</select>
-            <button class="btn primary block" data-act="demo-login">Đăng nhập demo</button>`
-            : `<div id="gsi-btn"></div><p class="muted small">Dùng đúng tài khoản Google có email trong danh sách thành viên.</p>`}
-        </div>
-      </div>`;
-    if (!DEMO) {
-      waitForGoogle().then(() => {
-        google.accounts.id.initialize({ client_id: CFG.GOOGLE_CLIENT_ID, callback: (r) => onCredential(r.credential), auto_select: true });
-        google.accounts.id.renderButton($('#gsi-btn'), { theme: 'filled_blue', size: 'large', text: 'signin_with', shape: 'pill', locale: 'vi' });
-        if (!message) google.accounts.id.prompt();
-      }).catch((e) => toast(e.message, 'error'));
-    }
+  function renderForceChange() {
+    $('#app').innerHTML = `<div class="login"><form class="login-card" id="pw-form">
+      <div class="logo">🔑</div><h1>Đổi mật khẩu</h1>
+      <p class="muted">Chào ${esc(me().name)}! Đây là lần đầu bạn đăng nhập (hoặc admin vừa đặt lại mật khẩu). Hãy đặt mật khẩu mới của riêng bạn.</p>
+      ${pwFields()}
+      <button class="btn primary block" id="pw-btn">Lưu mật khẩu mới</button>
+      <button type="button" class="btn ghost block" data-act="logout">Đăng xuất</button></form></div>`;
+    bindPwForm($('#pw-form'), async () => { me().mustChange = false; render(); });
   }
-
-  function onCredential(token) {
-    state.token = token;
-    store.set('idToken', token);
-    loadData();
-  }
-
-  function logout(message) {
-    state.token = null; state.data = null; state.demoEmail = null;
-    store.del('idToken'); store.del('demoEmail');
-    if (!DEMO && window.google && google.accounts) google.accounts.id.disableAutoSelect();
-    renderLogin(message);
+  const pwFields = () => `<label>Mật khẩu mới<input name="pw1" type="password" minlength="8" autocomplete="new-password" required></label>
+    <label>Nhập lại mật khẩu mới<input name="pw2" type="password" minlength="8" autocomplete="new-password" required></label>
+    <p class="muted small">Ít nhất 8 ký tự.</p>`;
+  function bindPwForm(form, done) {
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(form);
+      if (fd.get('pw1') !== fd.get('pw2')) return toast('Hai mật khẩu không khớp.', 'error');
+      await run(async () => { await S.changePassword(fd.get('pw1')); toast('Đã đổi mật khẩu.'); await done(); }, form.querySelector('.btn.primary'));
+    });
   }
 
   async function loadData() {
     $('#app').innerHTML = '<div class="loading"><div class="spinner"></div><p>Đang tải dữ liệu…</p></div>';
     try {
-      state.data = await api('bootstrap');
-      const valid = viewList().some((v) => v.id === state.view);
-      if (!valid) state.view = 'mine';
+      state.data = await S.loadAll();
+      if (!viewList().some((v) => v.id === state.view)) state.view = 'mine';
       render();
     } catch (e) {
-      if (AUTH_ERRORS.includes(e.code)) return logout('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.');
-      if (e.code === 'NOT_MEMBER') return logout(e.message);
-      $('#app').innerHTML = `<div class="loading"><p class="alert">${esc(e.message)}</p><button class="btn" data-act="reload">Thử lại</button> <button class="btn ghost" data-act="logout">Đăng xuất</button></div>`;
+      if (e.code === 'NOT_MEMBER') { await S.signOut(); return renderLogin(e.message); }
+      $('#app').innerHTML = `<div class="loading"><p class="alert">${esc(e.message)}</p>
+        <div><button class="btn" data-act="reload">Thử lại</button> <button class="btn ghost" data-act="logout">Đăng xuất</button></div></div>`;
     }
   }
 
-  /* ---------------- derived data ---------------- */
-  const D = () => state.data;
-  const me = () => D().me;
-  const myKey = () => nkey(me().name);
-  const banOf = (name) => D().bans.find((b) => b.name === name);
-  const isDone = (t) => t.status === D().doneStatus;
-  const peopleOfLead = (t) => String(t.lead || '').split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
-  const canManage = (ban) => !!(banOf(ban) && banOf(ban).canManage);
-  const isLeadOf = (t) => peopleOfLead(t).some((n) => nkey(n) === myKey());
-  const isAssignee = (t) => t.parts.some((p) => p.people.some((n) => nkey(n) === myKey()));
-  const canFull = (t) => canManage(t.ban) || isLeadOf(t);
-  const canEdit = (t) => canFull(t) || isAssignee(t);
-  const roleLabel = (ban, key) => { const r = banOf(ban).roles.find((x) => x.key === key); return r ? r.label : key; };
-  const memberKnown = (n) => D().members.some((m) => nkey(m.name) === nkey(n));
-  const canSeeConfirms = () => me().isAdmin || me().leadOf.length > 0;
-
+  /* ============================== khung trang ============================== */
   function viewList() {
     const v = [{ id: 'mine', label: '🙋 Việc của tôi' }];
-    D().bans.forEach((b) => v.push({ id: 'ban:' + b.name, label: b.name }));
-    v.push({ id: 'overview', label: '📊 Tổng quan' });
-    if (canSeeConfirms()) v.push({ id: 'confirm', label: '📧 Xác nhận email' });
+    [...D().bans].sort((a, b) => a.sort - b.sort).forEach((b) => v.push({ id: 'ban:' + b.id, label: b.name }));
+    if (me().isAdmin) { v.push({ id: 'dash', label: '📊 Dashboard' }); v.push({ id: 'admin', label: '⚙️ Quản trị' }); }
     return v;
   }
 
-  function deadlineBadge(iso, done) {
-    if (!iso) return '<span class="badge muted">Chưa có hạn</span>';
-    const d = daysUntil(iso);
-    if (done) return `<span class="badge muted">${fmtDate(iso)}</span>`;
-    if (d < 0) return `<span class="badge danger">Quá hạn ${-d} ngày · ${fmtDate(iso)}</span>`;
-    if (d === 0) return `<span class="badge warn">Hôm nay</span>`;
-    if (d === 1) return `<span class="badge warn">Ngày mai · ${fmtDate(iso)}</span>`;
-    if (d <= 3) return `<span class="badge warn">Còn ${d} ngày · ${fmtDate(iso)}</span>`;
-    return `<span class="badge">${fmtDate(iso)}</span>`;
-  }
-
-  function statusControl(t) {
-    const st = t.status || '';
-    if (!canEdit(t)) return `<span class="status s-${nkey(st || 'trong').replace(/ /g, '-')}">${esc(st || '—')}</span>`;
-    const opts = ['', ...D().statuses].map((s) => `<option value="${esc(s)}" ${s === st ? 'selected' : ''}>${esc(s || '— Trạng thái —')}</option>`).join('');
-    return `<select class="status-select s-${nkey(st || 'trong').replace(/ /g, '-')}" data-change="status" data-id="${esc(t.id)}">${opts}</select>`;
-  }
-
-  function linksOf(t) {
-    return Object.entries(t.extras || {}).filter(([, v]) => v && (v.url || v.text))
-      .map(([k, v]) => v.url
-        ? `<a class="link" href="${esc(v.url)}" target="_blank" rel="noopener" title="${esc(k)}">🔗 ${esc(v.text && v.text !== v.url ? v.text : k)}</a>`
-        : `<span class="link plain" title="${esc(k)}">${esc(k)}: ${esc(v.text)}</span>`).join(' ');
-  }
-
-  function chip(n) {
-    const mine = nkey(n) === myKey();
-    const unknown = !memberKnown(n);
-    return `<span class="chip ${mine ? 'me' : ''} ${unknown ? 'unknown' : ''}" title="${esc(n)}${unknown ? ' – không có trong danh sách thành viên' : ''}">${esc(shortName(n))}</span>`;
-  }
-
-  /* ---------------- layout ---------------- */
   function render() {
-    const views = viewList();
+    if (me().mustChange && !S.demo) return renderForceChange();
     const m = me();
+    const role = m.isAdmin ? 'Admin' : m.bans.some((b) => b.isLead) ? 'Trưởng ban' : 'Thành viên';
     $('#app').innerHTML = `
       <header class="topbar">
-        <div class="brand">📋 <span>${esc(D().clubName || CFG.CLUB_NAME)}</span>${DEMO ? '<em class="demo-tag">DEMO</em>' : ''}</div>
+        <div class="brand">📋 <span>${esc(CFG.CLUB_NAME || 'TeamTracking')}</span>${S.demo ? '<em class="demo-tag">DEMO</em>' : ''}</div>
         <div class="user">
-          <button class="btn ghost small" data-act="antispam" title="Để email nhắc việc không vào Spam">${m.confirm === 'tin_cay' ? '🛡️ Đã chống spam' : '🛡️ Chống spam'}</button>
-          <span class="who" title="${esc(m.email)}">${esc(m.name)}${m.isAdmin ? ' · Quản trị' : m.leadOf.length ? ' · Trưởng ban' : ''}</span>
-          <button class="btn ghost small" data-act="reload" title="Tải lại dữ liệu">⟳</button>
+          <button class="btn ghost small" data-act="antispam">${confirmOf(m.id) === 'tin_cay' ? '🛡️ Đã chống spam' : '🛡️ Chống spam'}</button>
+          <button class="btn ghost small" data-act="change-pw">🔑 Đổi mật khẩu</button>
+          <span class="who" title="${esc(m.email)}">${esc(m.name)} · ${role}</span>
+          <button class="btn ghost small" data-act="reload" title="Tải lại dữ liệu" aria-label="Tải lại">⟳</button>
           <button class="btn ghost small" data-act="logout">Đăng xuất</button>
         </div>
       </header>
-      <nav class="tabs">${views.map((v) => `<button class="tab ${v.id === state.view ? 'active' : ''}" data-act="view" data-view="${esc(v.id)}">${esc(v.label)}</button>`).join('')}</nav>
+      <nav class="tabs">${viewList().map((v) => `<button class="tab ${v.id === state.view ? 'active' : ''}" data-act="view" data-view="${esc(v.id)}">${esc(v.label)}</button>`).join('')}</nav>
       <main id="main"></main>`;
     renderMain();
   }
@@ -201,331 +172,267 @@
     const main = $('#main');
     if (v === 'mine') main.innerHTML = viewMine();
     else if (v.startsWith('ban:')) { main.innerHTML = viewBanShell(v.slice(4)); renderBanBody(); }
-    else if (v === 'overview') main.innerHTML = viewOverview();
-    else if (v === 'confirm') { main.innerHTML = '<div class="loading"><div class="spinner"></div></div>'; loadConfirms(); }
+    else if (v === 'dash') main.innerHTML = viewDash();
+    else if (v === 'admin') main.innerHTML = viewAdmin();
   }
 
-  /* ---------------- view: mine ---------------- */
+  /* ============================== mảnh giao diện dùng chung ============================== */
+  function deadlineBadge(iso, done) {
+    if (!iso) return '<span class="badge muted">Chưa có hạn</span>';
+    const d = daysUntil(iso);
+    if (done) return `<span class="badge muted">${fmtDate(iso)}</span>`;
+    if (d < 0) return `<span class="badge danger">Quá hạn ${-d} ngày · ${fmtDate(iso)}</span>`;
+    if (d === 0) return '<span class="badge warn">Hôm nay</span>';
+    if (d === 1) return `<span class="badge warn">Ngày mai · ${fmtDate(iso)}</span>`;
+    if (d <= 3) return `<span class="badge warn">Còn ${d} ngày · ${fmtDate(iso)}</span>`;
+    return `<span class="badge">${fmtDate(iso)}</span>`;
+  }
+  function statusControl(t) {
+    if (!canEdit(t)) return `<span class="status s-${t.status}">${STATUS[t.status]}</span>`;
+    return `<select class="status-select s-${t.status}" data-change="status" data-id="${esc(t.id)}" aria-label="Trạng thái">
+      ${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select>`;
+  }
+  function chip(id) {
+    const m = memberById(id);
+    const mine = id === me().id;
+    return `<span class="chip ${mine ? 'me' : ''} ${m && m.active ? '' : 'unknown'}" title="${esc(m ? m.name : 'Không rõ')}">${esc(shortName(m ? m.name : '?'))}</span>`;
+  }
+  const linksOf = (t) => t.links.filter((l) => l.url).map((l) => `<a class="link" href="${esc(l.url)}" target="_blank" rel="noopener">🔗 ${esc(l.label || 'Link')}</a>`).join(' ');
+  const eventLabel = (id) => { const e = eventById(id); return e ? e.name : 'Không thuộc sự kiện'; };
+
+  /* ============================== Việc của tôi ============================== */
   function viewMine() {
+    const myId = me().id;
     const items = [];
-    D().tasks.forEach((t) => t.parts.forEach((p) => {
-      if (p.people.some((n) => nkey(n) === myKey())) items.push({ t, p, d: daysUntil(p.deadline) });
-    }));
+    D().tasks.forEach((t) => t.parts.forEach((p) => { if (p.assigneeIds.includes(myId)) items.push({ t, p, d: daysUntil(p.deadline) }); }));
     const open = items.filter((x) => !isDone(x.t));
     const groups = [
-      { title: '🔴 Quá hạn', list: open.filter((x) => x.d !== null && x.d < 0) },
-      { title: '🟠 Hôm nay & ngày mai', list: open.filter((x) => x.d !== null && x.d >= 0 && x.d <= 1) },
-      { title: '🟡 Trong 7 ngày tới', list: open.filter((x) => x.d !== null && x.d > 1 && x.d <= 7) },
-      { title: '🔵 Sắp tới', list: open.filter((x) => x.d !== null && x.d > 7) },
-      { title: '⚪ Chưa có deadline', list: open.filter((x) => x.d === null) },
-    ];
-    groups.forEach((g) => g.list.sort((a, b) => (a.d ?? 1e9) - (b.d ?? 1e9)));
-    const doneCount = items.filter((x) => isDone(x.t)).length;
-    const leading = D().tasks.filter((t) => isLeadOf(t) && !isDone(t));
+      ['🔴 Quá hạn', (x) => x.d !== null && x.d < 0],
+      ['🟠 Hôm nay & ngày mai', (x) => x.d !== null && x.d >= 0 && x.d <= 1],
+      ['🟡 Trong 7 ngày tới', (x) => x.d !== null && x.d > 1 && x.d <= 7],
+      ['🔵 Sắp tới', (x) => x.d !== null && x.d > 7],
+      ['⚪ Chưa có deadline', (x) => x.d === null],
+    ].map(([title, f]) => ({ title, list: open.filter(f).sort((a, b) => (a.d ?? 1e9) - (b.d ?? 1e9)) }));
+    const leading = D().tasks.filter((t) => isTaskLead(t) && !isDone(t));
 
-    const card = ({ t, p }) => `
-      <div class="card task-card">
+    const card = ({ t, p }) => {
+      const ban = banById(t.banId);
+      const role = ban && roleById(ban, p.roleId);
+      return `<div class="card task-card">
         <div class="tc-main">
           <div class="tc-title">${esc(t.name)}</div>
-          <div class="tc-meta">${esc(t.event || 'Không có sự kiện')} · ${esc(t.ban)}${banOf(t.ban).roles.length > 1 ? ' · <b>' + esc(roleLabel(t.ban, p.role)) + '</b>' : ''}</div>
+          <div class="tc-meta">${esc(eventLabel(t.eventId))} · ${esc(ban ? ban.name : '')}${ban && ban.roles.length > 1 && role ? ' · <b>' + esc(role.label) + '</b>' : ''}</div>
           ${t.note ? `<div class="tc-note">${esc(t.note)}</div>` : ''}
           <div class="tc-links">${linksOf(t)}</div>
         </div>
-        <div class="tc-side">
-          ${deadlineBadge(p.deadline, isDone(t))}
-          ${statusControl(t)}
-          <button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">Chi tiết</button>
-        </div>
-      </div>`;
-
+        <div class="tc-side">${deadlineBadge(p.deadline, false)}${statusControl(t)}
+          <button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">Chi tiết</button></div></div>`;
+    };
     let html = antispamBanner();
-    html += `<div class="page-head"><h2>Việc của tôi</h2><p class="muted">${open.length} việc chưa xong · ${doneCount} đã hoàn thành</p></div>`;
+    html += `<div class="page-head"><h2>Việc của tôi</h2><p class="muted">${open.length} việc chưa xong · ${items.length - open.length} đã hoàn thành</p></div>`;
     if (!items.length) html += '<div class="empty">Bạn chưa được giao việc nào. 🎉</div>';
-    groups.forEach((g) => {
-      if (!g.list.length) return;
-      html += `<section class="group"><h3>${g.title} <span class="count">${g.list.length}</span></h3>${g.list.map(card).join('')}</section>`;
-    });
+    groups.forEach((g) => { if (g.list.length) html += `<section class="group"><h3>${g.title} <span class="count">${g.list.length}</span></h3>${g.list.map(card).join('')}</section>`; });
     if (leading.length) {
-      html += `<section class="group"><h3>⭐ Việc tôi làm Lead <span class="count">${leading.length}</span></h3>
-        <div class="card"><table class="mini"><tbody>${leading.map((t) => `<tr>
-          <td><b>${esc(t.name)}</b><div class="muted small">${esc(t.event)} · ${esc(t.ban)}</div></td>
-          <td>${t.parts.map((p) => p.people.map(chip).join('') + ' ' + (p.deadline ? deadlineBadge(p.deadline, false) : '')).join('<br>')}</td>
-          <td>${statusControl(t)}</td>
-          <td><button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">Sửa</button></td></tr>`).join('')}</tbody></table></div></section>`;
+      html += `<section class="group"><h3>⭐ Việc tôi làm Lead <span class="count">${leading.length}</span></h3><div class="card"><div class="table-wrap"><table class="mini"><tbody>
+        ${leading.map((t) => `<tr><td><b>${esc(t.name)}</b><div class="muted small">${esc(eventLabel(t.eventId))} · ${esc(banById(t.banId).name)}</div></td>
+          <td>${t.parts.map((p) => p.assigneeIds.map(chip).join('') + ' ' + (p.deadline ? deadlineBadge(p.deadline, false) : '')).join('<br>')}</td>
+          <td>${statusControl(t)}</td><td><button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">Sửa</button></td></tr>`).join('')}
+        </tbody></table></div></div></section>`;
     }
     return html;
   }
 
   function antispamBanner() {
-    if (me().confirm === 'tin_cay') return '';
-    return `<div class="banner">
-      <div><b>🛡️ Để email nhắc việc không rơi vào Spam</b><br><span class="small">Mất 10 giây: cho phép website tạo bộ lọc Gmail, hoặc trả lời "OK" email xác nhận từ <b>${esc(D().senderEmail)}</b>.</span></div>
+    if (confirmOf(me().id) === 'tin_cay') return '';
+    return `<div class="banner"><div><b>🛡️ Để email nhắc việc không rơi vào Spam</b><br>
+      <span class="small">Trả lời "OK" email tài khoản từ <b>${esc(D().settings.sender_email || 'hệ thống')}</b>${CFG.GOOGLE_CLIENT_ID || S.demo ? ', hoặc để website tự tạo bộ lọc Gmail' : ''}.</span></div>
       <button class="btn primary small" data-act="antispam">Làm ngay</button></div>`;
   }
 
-  /* ---------------- view: ban ---------------- */
-  function viewBanShell(banName) {
-    const b = banOf(banName);
+  /* ============================== Trang Ban ============================== */
+  function viewBanShell(banId) {
+    const b = banById(banId);
     if (!b) return '<div class="empty">Không tìm thấy Ban.</div>';
-    const f = state.filters[banName] || (state.filters[banName] = { event: '', status: 'open', person: '', q: '' });
-    const events = [...new Set(D().tasks.filter((t) => t.ban === banName).map((t) => t.event || ''))];
-    const people = D().members.filter((m) => m.bans.includes(banName)).map((m) => m.name);
-    return `
-      <div class="page-head row">
-        <div><h2>${esc(banName)}</h2><p class="muted">${b.roles.length > 1 ? 'Vai trò: ' + b.roles.map((r) => esc(r.label)).join(' · ') : ''}</p></div>
-        ${b.canManage ? `<div class="actions">
-          <button class="btn" data-act="clone" data-ban="${esc(banName)}">⧉ Tạo sự kiện từ mẫu</button>
-          <button class="btn primary" data-act="new" data-ban="${esc(banName)}">＋ Thêm công việc</button></div>` : ''}
+    const f = state.filters[banId] || (state.filters[banId] = { event: '', status: 'open', person: '', q: '' });
+    const evIds = [...new Set(D().tasks.filter((t) => t.banId === banId).map((t) => t.eventId || ''))];
+    const evs = eventsSorted().filter((e) => evIds.includes(e.id));
+    const people = activeMembers().filter((m) => m.bans.some((x) => x.banId === banId));
+    return `<div class="page-head row">
+        <div><h2>${esc(b.name)}</h2><p class="muted">${b.roles.length > 1 ? 'Vai trò: ' + b.roles.map((r) => esc(r.label)).join(' · ') : ''}</p></div>
+        ${canManageBan(banId) ? `<div class="actions"><button class="btn" data-act="clone" data-ban="${esc(banId)}">⧉ Tạo sự kiện từ mẫu</button>
+          <button class="btn primary" data-act="new" data-ban="${esc(banId)}">＋ Thêm công việc</button></div>` : ''}
       </div>
       <div class="filters">
-        <select data-filter="event"><option value="">Tất cả sự kiện</option>${events.map((e) => `<option value="${esc(e)}" ${f.event === e ? 'selected' : ''}>${esc(e || '(Không có sự kiện)')}</option>`).join('')}</select>
-        <select data-filter="status">
+        <select data-filter="event" aria-label="Sự kiện"><option value="">Tất cả sự kiện</option>
+          ${evs.map((e) => `<option value="${esc(e.id)}" ${f.event === e.id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}
+          ${evIds.includes('') ? `<option value="__none" ${f.event === '__none' ? 'selected' : ''}>(Không thuộc sự kiện)</option>` : ''}</select>
+        <select data-filter="status" aria-label="Trạng thái">
           <option value="open" ${f.status === 'open' ? 'selected' : ''}>Chưa hoàn thành</option>
           <option value="" ${f.status === '' ? 'selected' : ''}>Tất cả trạng thái</option>
-          ${D().statuses.map((s) => `<option value="${esc(s)}" ${f.status === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
-          <option value="late" ${f.status === 'late' ? 'selected' : ''}>Đang quá hạn</option>
-        </select>
-        <select data-filter="person"><option value="">Mọi người</option>
-          <option value="__me" ${f.person === '__me' ? 'selected' : ''}>Chỉ việc của tôi</option>
-          ${people.map((n) => `<option value="${esc(n)}" ${f.person === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
-        <input type="search" data-filter="q" placeholder="Tìm công việc, ghi chú…" value="${esc(f.q)}">
+          ${Object.keys(STATUS).map((k) => `<option value="${k}" ${f.status === k ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}
+          <option value="late" ${f.status === 'late' ? 'selected' : ''}>Đang quá hạn</option></select>
+        <select data-filter="person" aria-label="Người"><option value="">Mọi người</option>
+          <option value="${esc(me().id)}" ${f.person === me().id ? 'selected' : ''}>Chỉ việc của tôi</option>
+          ${people.map((m) => `<option value="${esc(m.id)}" ${f.person === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select>
+        <input type="search" data-filter="q" placeholder="Tìm công việc, ghi chú…" value="${esc(f.q)}" aria-label="Tìm kiếm">
       </div>
-      <div id="ban-body" data-ban="${esc(banName)}"></div>`;
-  }
-
-  function filteredTasks(banName) {
-    const f = state.filters[banName];
-    const q = nkey(f.q);
-    return D().tasks.filter((t) => {
-      if (t.ban !== banName) return false;
-      if (f.event && (t.event || '') !== f.event) return false;
-      if (f.status === 'open' && isDone(t)) return false;
-      if (f.status === 'late' && (isDone(t) || !t.parts.some((p) => p.deadline && daysUntil(p.deadline) < 0))) return false;
-      if (f.status && !['open', 'late'].includes(f.status) && (t.status || '') !== f.status) return false;
-      if (f.person) {
-        const k = f.person === '__me' ? myKey() : nkey(f.person);
-        if (!t.parts.some((p) => p.people.some((n) => nkey(n) === k)) && !peopleOfLead(t).some((n) => nkey(n) === k)) return false;
-      }
-      if (q && !nkey(t.name + ' ' + t.note + ' ' + t.event).includes(q)) return false;
-      return true;
-    });
+      <div id="ban-body" data-ban="${esc(banId)}"></div>`;
   }
 
   function renderBanBody() {
     const body = $('#ban-body');
     if (!body) return;
-    const banName = body.dataset.ban;
-    const b = banOf(banName);
-    const all = D().tasks.filter((t) => t.ban === banName);
-    const list = filteredTasks(banName);
+    const banId = body.dataset.ban;
+    const b = banById(banId);
+    const f = state.filters[banId];
+    const q = nkey(f.q);
+    const all = D().tasks.filter((t) => t.banId === banId);
+    const list = all.filter((t) => {
+      if (f.event === '__none' ? t.eventId : f.event && t.eventId !== f.event) return false;
+      if (f.status === 'open' && isDone(t)) return false;
+      if (f.status === 'late' && !isLate(t)) return false;
+      if (STATUS[f.status] && t.status !== f.status) return false;
+      if (f.person && !t.parts.some((p) => p.assigneeIds.includes(f.person)) && !t.leadIds.includes(f.person)) return false;
+      if (q && !nkey(t.name + ' ' + t.note).includes(q)) return false;
+      return true;
+    });
     if (!list.length) { body.innerHTML = '<div class="empty">Không có công việc nào khớp bộ lọc.</div>'; return; }
-    const order = [];
-    list.forEach((t) => { if (!order.includes(t.event || '')) order.push(t.event || ''); });
-    body.innerHTML = order.map((ev) => {
-      const rows = list.filter((t) => (t.event || '') === ev);
-      const evAll = all.filter((t) => (t.event || '') === ev);
+    const order = [...new Set(list.map((t) => t.eventId || ''))].sort((x, y) => {
+      const a = eventById(x), c = eventById(y);
+      return ((c && c.date) || '0').localeCompare((a && a.date) || '0');
+    });
+    body.innerHTML = order.map((evId) => {
+      const ev = eventById(evId);
+      const rows = list.filter((t) => (t.eventId || '') === evId);
+      const evAll = all.filter((t) => (t.eventId || '') === evId);
       const done = evAll.filter(isDone).length;
-      const pct = evAll.length ? Math.round((done / evAll.length) * 100) : 0;
       return `<section class="event">
-        <div class="event-head"><h3>${esc(ev || '(Không có sự kiện)')}</h3>
-          <div class="progress" title="${done}/${evAll.length} việc hoàn thành"><div style="width:${pct}%"></div></div>
+        <div class="event-head"><h3>${esc(ev ? ev.name : '(Không thuộc sự kiện)')}</h3>${ev && ev.date ? `<span class="badge">📅 ${fmtDate(ev.date, true)}</span>` : ''}
+          <div class="progress" role="img" aria-label="${done}/${evAll.length} việc hoàn thành"><div style="width:${pct(done, evAll.length) || 0}%"></div></div>
           <span class="muted small">${done}/${evAll.length} xong</span></div>
         <div class="table-wrap"><table class="tasks">
-          <thead><tr><th>Công việc</th>${b.roles.map((r) => `<th>${esc(r.label)}</th>`).join('')}${b.hasLead ? '<th>Lead</th>' : ''}<th>Trạng thái</th><th>Liên kết</th><th></th></tr></thead>
+          <thead><tr><th>Công việc</th>${b.roles.map((r) => `<th>${esc(r.label)}</th>`).join('')}<th>Lead</th><th>Trạng thái</th><th>Liên kết</th><th></th></tr></thead>
           <tbody>${rows.map((t) => `<tr class="${isDone(t) ? 'done' : ''} ${isAssignee(t) ? 'mine' : ''}">
             <td class="c-name"><b>${esc(t.name)}</b>${t.note ? `<div class="note">${esc(t.note)}</div>` : ''}</td>
-            ${t.parts.map((p) => `<td class="c-role">${p.people.length ? p.people.map(chip).join('') : '<span class="chip empty">Chưa giao</span>'}
-              ${banOf(t.ban).roles.find((r) => r.key === p.role).hasDeadline ? '<div>' + deadlineBadge(p.deadline, isDone(t)) + '</div>' : ''}</td>`).join('')}
-            ${b.hasLead ? `<td>${peopleOfLead(t).map(chip).join('')}</td>` : ''}
+            ${b.roles.map((r) => { const p = partFor(t, r.id); return `<td class="c-role">${p.assigneeIds.length ? p.assigneeIds.map(chip).join('') : '<span class="chip empty">Chưa giao</span>'}
+              ${r.hasDeadline ? '<div>' + deadlineBadge(p.deadline, isDone(t)) + '</div>' : ''}</td>`; }).join('')}
+            <td>${t.leadIds.map(chip).join('')}</td>
             <td>${statusControl(t)}</td>
             <td class="c-links">${linksOf(t)}</td>
-            <td>${canEdit(t) ? `<button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">Sửa</button>` : `<button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">Xem</button>`}</td>
+            <td><button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">${canEdit(t) ? 'Sửa' : 'Xem'}</button></td>
           </tr>`).join('')}</tbody></table></div></section>`;
     }).join('');
   }
 
-  /* ---------------- view: overview ---------------- */
-  function viewOverview() {
-    const tasks = D().tasks;
-    const open = tasks.filter((t) => !isDone(t));
-    const late = open.filter((t) => t.parts.some((p) => p.deadline && daysUntil(p.deadline) < 0));
-    const week = [];
-    open.forEach((t) => t.parts.forEach((p) => { const d = daysUntil(p.deadline); if (d !== null && d >= 0 && d <= 7) week.push({ t, p, d }); }));
-    week.sort((a, b) => a.d - b.d);
-
-    const kpi = (label, val, cls = '') => `<div class="kpi ${cls}"><div class="kpi-val">${val}</div><div class="kpi-label">${label}</div></div>`;
-    const banCards = D().bans.map((b) => {
-      const bt = tasks.filter((t) => t.ban === b.name);
-      const counts = {};
-      bt.forEach((t) => { const s = t.status || '(Trống)'; counts[s] = (counts[s] || 0) + 1; });
-      const bl = bt.filter((t) => !isDone(t) && t.parts.some((p) => p.deadline && daysUntil(p.deadline) < 0)).length;
-      const unassigned = bt.filter((t) => !isDone(t) && t.parts.some((p) => !p.people.length)).length;
-      const total = bt.length || 1;
-      const order = [...D().statuses, '(Trống)'];
-      return `<div class="card"><h3>${esc(b.name)}</h3>
-        <div class="stack">${order.filter((s) => counts[s]).map((s) => `<div class="seg s-${nkey(s === '(Trống)' ? 'trong' : s).replace(/ /g, '-')}" style="width:${(counts[s] / total) * 100}%" title="${esc(s)}: ${counts[s]}"></div>`).join('')}</div>
-        <div class="legend">${order.filter((s) => counts[s]).map((s) => `<span><i class="dot s-${nkey(s === '(Trống)' ? 'trong' : s).replace(/ /g, '-')}"></i>${esc(s)} <b>${counts[s]}</b></span>`).join('')}</div>
-        <p class="small">${bl ? `<span class="badge danger">${bl} việc quá hạn</span>` : '<span class="badge ok">Không có việc quá hạn</span>'}
-        ${unassigned ? ` <span class="badge warn">${unassigned} việc chưa giao người</span>` : ''}</p></div>`;
-    }).join('');
-
-    const load = {};
-    D().members.forEach((m) => { load[nkey(m.name)] = { name: m.name, bans: m.bans, open: 0, late: 0, next: null }; });
-    open.forEach((t) => t.parts.forEach((p) => p.people.forEach((n) => {
-      const k = nkey(n);
-      const L = load[k] || (load[k] = { name: n, bans: [], open: 0, late: 0, next: null, unknown: true });
-      L.open++;
-      const d = daysUntil(p.deadline);
-      if (d !== null && d < 0) L.late++;
-      if (d !== null && d >= 0 && (L.next === null || d < L.next.d)) L.next = { d, iso: p.deadline };
-    })));
-    const rows = Object.values(load).sort((a, b) => b.late - a.late || b.open - a.open || a.name.localeCompare(b.name, 'vi'));
-    const maxOpen = Math.max(1, ...rows.map((r) => r.open));
-
-    return `<div class="page-head"><h2>Tổng quan</h2></div>
-      <div class="kpis">${kpi('Việc chưa hoàn thành', open.length)}${kpi('Đang quá hạn', late.length, late.length ? 'danger' : '')}${kpi('Đến hạn trong 7 ngày', week.length, 'warn')}${kpi('Đã hoàn thành', tasks.length - open.length, 'ok')}</div>
-      <div class="grid2">${banCards}</div>
-      <div class="grid2">
-        <div class="card"><h3>📅 Đến hạn trong 7 ngày tới</h3>${week.length ? `<table class="mini"><tbody>${week.map(({ t, p }) => `<tr>
-          <td><b>${esc(t.name)}</b><div class="muted small">${esc(t.event)} · ${esc(t.ban)}${banOf(t.ban).roles.length > 1 ? ' · ' + esc(roleLabel(t.ban, p.role)) : ''}</div></td>
-          <td>${p.people.length ? p.people.map(chip).join('') : '<span class="chip empty">Chưa giao</span>'}</td><td>${deadlineBadge(p.deadline, false)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">Không có.</p>'}</div>
-        <div class="card"><h3>👥 Khối lượng theo thành viên</h3><table class="mini"><thead><tr><th>Thành viên</th><th>Đang làm</th><th>Quá hạn</th><th>Hạn gần nhất</th></tr></thead><tbody>
-          ${rows.map((r) => `<tr><td>${esc(r.name)}${r.unknown ? ' <span class="badge warn" title="Tên này không có trong tab Danh sách thành viên nên sẽ không nhận được email nhắc">không khớp danh sách</span>' : ''}<div class="muted small">${esc(r.bans.join(', '))}</div></td>
-            <td><div class="bar"><div style="width:${(r.open / maxOpen) * 100}%"></div><span>${r.open}</span></div></td>
-            <td>${r.late ? `<span class="badge danger">${r.late}</span>` : '—'}</td>
-            <td>${r.next ? deadlineBadge(r.next.iso, false) : '—'}</td></tr>`).join('')}</tbody></table></div>
-      </div>`;
-  }
-
-  /* ---------------- view: confirmations ---------------- */
-  const CONFIRM_LABEL = {
-    tin_cay: ['🟢', 'Đã trả lời / tạo bộ lọc', 'ok'],
-    da_bam: ['🟡', 'Đã bấm link, chưa trả lời', 'warn'],
-    da_gui: ['🔴', 'Chưa phản hồi', 'danger'],
-    chua_gui: ['⚪', 'Chưa gửi email', 'muted'],
-  };
-  async function loadConfirms() {
-    await run(async () => {
-      state.confirms = await api('confirmations');
-      if (state.view === 'confirm') $('#main').innerHTML = viewConfirm();
-    });
-  }
-  function viewConfirm() {
-    const list = state.confirms || [];
-    const count = (s) => list.filter((x) => x.status === s).length;
-    const order = { da_gui: 0, chua_gui: 1, da_bam: 2, tin_cay: 3 };
-    const sorted = [...list].sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name, 'vi'));
-    return `<div class="page-head row"><div><h2>Xác nhận email chống spam</h2>
-        <p class="muted">Email gửi từ <b>${esc(D().senderEmail)}</b>. Hệ thống tự kiểm tra email trả lời và tự gửi lại cho người chưa phản hồi mỗi sáng (tối đa 3 lần).</p></div>
-        <div class="actions"><button class="btn" data-act="confirm-reload">⟳ Tải lại</button>
-        ${count('chua_gui') ? `<button class="btn primary" data-act="send-welcome">📧 Gửi email xác nhận cho ${count('chua_gui')} người chưa nhận</button>` : ''}</div></div>
-      <div class="kpis">${Object.keys(CONFIRM_LABEL).map((k) => `<div class="kpi ${CONFIRM_LABEL[k][2]}"><div class="kpi-val">${count(k)}</div><div class="kpi-label">${CONFIRM_LABEL[k][0]} ${CONFIRM_LABEL[k][1]}</div></div>`).join('')}</div>
-      <div class="card"><div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th><th>Email</th><th>Trạng thái</th><th>Số lần gửi</th></tr></thead><tbody>
-        ${sorted.map((x) => `<tr><td>${esc(x.name)}<div class="muted small">${esc(x.bans.join(', '))}</div></td><td class="small">${esc(x.email || '(chưa có email)')}</td>
-          <td><span class="badge ${CONFIRM_LABEL[x.status][2]}">${CONFIRM_LABEL[x.status][0]} ${CONFIRM_LABEL[x.status][1]}</span></td><td>${x.sends}</td></tr>`).join('')}
-      </tbody></table></div>
-      <p class="muted small">Người ở trạng thái 🔴 sau 3 lần gửi: hãy nhắn trực tiếp qua Zalo để họ kiểm tra mục Spam và bấm "Không phải thư rác".</p></div>`;
-  }
-
-  /* ---------------- modal: edit task ---------------- */
-  function openModal(html, cls = '') {
+  /* ============================== Modal ============================== */
+  function openModal(html) {
     const dlg = $('#modal');
-    dlg.className = cls;
     dlg.innerHTML = html;
     if (!dlg.open) dlg.showModal();
+    const first = dlg.querySelector('input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea');
+    if (first) first.focus();
   }
-  function closeModal() { const d = $('#modal'); if (d.open) d.close(); }
+  const closeModal = () => { const d = $('#modal'); if (d.open) d.close(); };
+  const modalHead = (title, sub) => `<header class="m-head"><h3>${title}</h3>${sub ? `<span class="muted small">${esc(sub)}</span>` : ''}
+    <button type="button" class="btn ghost small x" data-act="close" aria-label="Đóng">✕</button></header>`;
 
-  function peopleEditor(name, list, ban, disabled) {
-    const banMembers = D().members.filter((m) => m.bans.includes(ban)).map((m) => m.name);
-    const others = D().members.filter((m) => !m.bans.includes(ban)).map((m) => m.name);
+  function peopleEditor(name, ids, banId, disabled) {
+    const inBan = activeMembers().filter((m) => m.bans.some((x) => x.banId === banId));
+    const others = activeMembers().filter((m) => !m.bans.some((x) => x.banId === banId));
     return `<div class="people" data-people="${esc(name)}">
-      <span class="chips">${list.map((n) => `<span class="chip ${memberKnown(n) ? '' : 'unknown'}" data-name="${esc(n)}">${esc(n)}${disabled ? '' : '<button type="button" data-act="chip-x" aria-label="Bỏ">×</button>'}</span>`).join('')}</span>
-      ${disabled ? '' : `<select data-change="chip-add"><option value="">＋ Thêm người</option>
-        <optgroup label="${esc(ban)}">${banMembers.map((n) => `<option>${esc(n)}</option>`).join('')}</optgroup>
-        ${others.length ? `<optgroup label="Ban khác">${others.map((n) => `<option>${esc(n)}</option>`).join('')}</optgroup>` : ''}</select>`}
-    </div>`;
+      <span class="chips">${ids.map((id) => `<span class="chip" data-id="${esc(id)}">${esc(mName(id))}${disabled ? '' : '<button type="button" data-act="chip-x" aria-label="Bỏ">×</button>'}</span>`).join('')}</span>
+      ${disabled ? '' : `<select data-change="chip-add" aria-label="Thêm người"><option value="">＋ Thêm người</option>
+        <optgroup label="${esc(banById(banId).name)}">${inBan.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</optgroup>
+        ${others.length ? `<optgroup label="Ban khác">${others.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</optgroup>` : ''}</select>`}</div>`;
+  }
+  const chipIds = (form, name) => { const box = form.querySelector(`[data-people="${CSS.escape(name)}"]`); return box ? $$('.chip', box).map((c) => c.dataset.id) : []; };
+
+  function eventSelect(selected, disabled, withNew) {
+    return `<select name="event" ${disabled ? 'disabled' : ''} data-change="event-select">
+      <option value="">— Không thuộc sự kiện —</option>
+      ${eventsSorted().map((e) => `<option value="${esc(e.id)}" ${e.id === selected ? 'selected' : ''}>${esc(e.name)}${e.date ? ' (' + fmtDate(e.date, true) + ')' : ''}</option>`).join('')}
+      ${withNew ? '<option value="__new">＋ Tạo sự kiện mới…</option>' : ''}</select>
+      <div class="new-event hidden"><input name="newEventName" placeholder="Tên sự kiện mới"><input name="newEventDate" type="date" aria-label="Ngày diễn ra"></div>`;
   }
 
-  function openTaskModal(t, banName) {
-    const ban = banName || t.ban;
-    const b = banOf(ban);
+  function openTaskModal(t, banId) {
     const creating = !t;
-    t = t || { ban, name: '', event: (state.filters[ban] || {}).event || '', lead: '', status: '', note: '', parts: b.roles.map((r) => ({ role: r.key, people: [], deadline: '' })), extras: {} };
+    const b = banById(creating ? banId : t.banId);
+    if (creating) t = { banId: b.id, eventId: (state.filters[b.id] || {}).event || '', name: '', status: 'todo', note: '', leadIds: [], links: [], parts: [] };
+    if (t.eventId === '__none') t.eventId = '';
     const full = creating || canFull(t);
     const editable = creating || canEdit(t);
     const dis = full ? '' : 'disabled';
-    const events = [...new Set(D().tasks.filter((x) => x.ban === ban).map((x) => x.event).filter(Boolean))];
-    openModal(`<form method="dialog" id="task-form">
-      <header class="m-head"><h3>${creating ? 'Thêm công việc' : editable ? 'Sửa công việc' : 'Chi tiết công việc'}</h3><span class="muted small">${esc(ban)}</span>
-        <button type="button" class="btn ghost small x" data-act="close">✕</button></header>
+    const links = t.links.length ? t.links : [{ label: '', url: '' }];
+    openModal(`<form id="task-form">
+      ${modalHead(creating ? 'Thêm công việc' : editable ? 'Sửa công việc' : 'Chi tiết công việc', b.name)}
       <div class="m-body">
-        ${!full && editable ? '<p class="hint">Bạn là người được giao việc: có thể cập nhật trạng thái, ghi chú và liên kết sản phẩm.</p>' : ''}
+        ${!full && editable ? '<p class="hint">Bạn được giao việc này: có thể cập nhật trạng thái, ghi chú và liên kết.</p>' : ''}
         <label>Tên công việc *<input name="name" required value="${esc(t.name)}" ${dis}></label>
-        <label>Tên sự kiện<input name="event" list="events-dl" value="${esc(t.event)}" ${dis}><datalist id="events-dl">${events.map((e) => `<option value="${esc(e)}">`).join('')}</datalist></label>
-        <div class="roles">${b.roles.map((r, i) => { const p = t.parts[i] || { people: [], deadline: '' }; return `<fieldset>
-          <legend>${esc(r.label)}</legend>
-          ${peopleEditor('role:' + r.key, p.people, ban, !full)}
-          ${r.hasDeadline ? `<label class="inline">Deadline <input type="date" name="dl:${esc(r.key)}" value="${esc(p.deadline)}" ${dis}></label>` : ''}
-        </fieldset>`; }).join('')}</div>
-        ${b.hasLead ? `<div class="field"><span class="lbl">Lead CV</span>${peopleEditor('lead', peopleOfLead(t), ban, !full)}</div>` : ''}
-        <label>Trạng thái<select name="status" ${editable ? '' : 'disabled'}>${['', ...D().statuses].map((s) => `<option value="${esc(s)}" ${s === t.status ? 'selected' : ''}>${esc(s || '—')}</option>`).join('')}</select></label>
-        ${b.hasNote ? `<label>Ghi chú<textarea name="note" rows="3" ${editable ? '' : 'disabled'}>${esc(t.note)}</textarea></label>` : ''}
-        ${b.extraFields.map((f) => { const v = t.extras[f] || { text: '', url: '' }; return `<label>${esc(f)}
-          <input name="ex:${esc(f)}" value="${esc(v.url || v.text)}" placeholder="Dán link (https://…) hoặc ghi chú" ${editable ? '' : 'disabled'}>
-          ${v.url ? `<a class="small" href="${esc(v.url)}" target="_blank" rel="noopener">Mở liên kết ↗</a>` : ''}</label>`; }).join('')}
+        <label>Sự kiện ${eventSelect(t.eventId, !full, full && canCreateEvent())}</label>
+        <div class="roles">${b.roles.map((r) => { const p = partFor(t, r.id); return `<fieldset><legend>${esc(r.label)}</legend>
+          ${peopleEditor('role:' + r.id, p.assigneeIds, b.id, !full)}
+          ${r.hasDeadline ? `<label class="inline">Deadline <input type="date" name="dl:${esc(r.id)}" value="${esc(p.deadline)}" ${dis}></label>` : ''}</fieldset>`; }).join('')}</div>
+        <div class="field"><span class="lbl">Lead CV</span>${peopleEditor('lead', t.leadIds, b.id, !full)}</div>
+        <label>Trạng thái<select name="status" ${editable ? '' : 'disabled'}>${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select></label>
+        <label>Ghi chú<textarea name="note" rows="3" ${editable ? '' : 'disabled'}>${esc(t.note)}</textarea></label>
+        <div class="field"><span class="lbl">Liên kết sản phẩm</span><div id="links">
+          ${links.map((l) => linkRow(l, !editable)).join('')}</div>
+          ${editable ? '<button type="button" class="btn ghost small" data-act="link-add">＋ Thêm liên kết</button>' : ''}</div>
       </div>
       <footer class="m-foot">
-        ${!creating && canManage(ban) ? `<button type="button" class="btn danger-ghost" data-act="delete" data-id="${esc(t.id)}">Xóa</button>` : '<span></span>'}
+        ${!creating && canManageBan(t.banId) ? `<button type="button" class="btn danger-ghost" data-act="delete" data-id="${esc(t.id)}">Xóa</button>` : '<span></span>'}
         <div><button type="button" class="btn" data-act="close">${editable ? 'Hủy' : 'Đóng'}</button>
-        ${editable ? `<button type="submit" class="btn primary" id="save-btn">${creating ? 'Thêm' : 'Lưu'}</button>` : ''}</div>
+        ${editable ? `<button class="btn primary" id="save-btn">${creating ? 'Thêm' : 'Lưu'}</button>` : ''}</div>
       </footer></form>`);
-    const form = $('#task-form');
-    form.addEventListener('submit', (ev) => { ev.preventDefault(); saveTaskFromForm(form, t, ban, creating, full); });
+    $('#task-form').addEventListener('submit', (ev) => { ev.preventDefault(); saveTaskForm(ev.target, t, b, creating, full); });
   }
+  const linkRow = (l, disabled) => `<div class="link-row"><input name="linkLabel" placeholder="Tên (vd. Link design)" value="${esc(l.label)}" ${disabled ? 'disabled' : ''} aria-label="Tên liên kết">
+    <input name="linkUrl" placeholder="https://…" value="${esc(l.url)}" ${disabled ? 'disabled' : ''} aria-label="Địa chỉ liên kết">
+    ${disabled ? '' : '<button type="button" class="btn ghost small" data-act="link-x" aria-label="Xóa liên kết">✕</button>'}</div>`;
 
-  function chipsOf(form, name) {
-    const box = form.querySelector(`[data-people="${CSS.escape(name)}"]`);
-    return box ? $$('.chip', box).map((c) => c.dataset.name) : [];
-  }
-
-  async function saveTaskFromForm(form, t, ban, creating, full) {
-    const b = banOf(ban);
+  async function saveTaskForm(form, t, b, creating, full) {
     const fd = new FormData(form);
-    const task = { status: fd.get('status') || '' };
-    if (b.hasNote) task.note = fd.get('note') || '';
-    task.extras = {};
-    b.extraFields.forEach((f) => { task.extras[f] = (fd.get('ex:' + f) || '').trim(); });
-    if (full) {
-      task.name = (fd.get('name') || '').trim();
-      task.event = (fd.get('event') || '').trim();
-      if (!task.name) return toast('Hãy nhập tên công việc.', 'error');
-      if (b.hasLead) task.lead = chipsOf(form, 'lead');
-      task.parts = {};
-      b.roles.forEach((r) => {
-        task.parts[r.key] = { people: chipsOf(form, 'role:' + r.key) };
-        if (r.hasDeadline) task.parts[r.key].deadline = fd.get('dl:' + r.key) || '';
-      });
-    }
+    const labels = fd.getAll('linkLabel'), urls = fd.getAll('linkUrl');
+    const links = urls.map((u, i) => ({ label: String(labels[i] || '').trim(), url: String(u || '').trim() })).filter((l) => l.url);
+    if (links.some((l) => !/^https?:\/\//i.test(l.url))) return toast('Liên kết phải bắt đầu bằng http:// hoặc https://', 'error');
+    const task = { id: t.id, banId: b.id, status: fd.get('status'), note: String(fd.get('note') || '').trim(), links };
     await run(async () => {
-      const saved = await api('saveTask', { ban, row: creating ? null : t.row, expectName: creating ? null : t.name, task });
+      if (full) {
+        task.name = String(fd.get('name') || '').trim();
+        if (!task.name) throw new Error('Hãy nhập tên công việc.');
+        let ev = fd.get('event') || '';
+        if (ev === '__new') {
+          const name = String(fd.get('newEventName') || '').trim();
+          if (!name) throw new Error('Hãy nhập tên sự kiện mới.');
+          const created = await S.saveEvent({ name, date: fd.get('newEventDate') || '' });
+          D().events.push(created);
+          ev = created.id;
+        }
+        task.eventId = ev || null;
+        task.leadIds = chipIds(form, 'lead');
+        task.parts = b.roles.map((r) => ({ roleId: r.id, assigneeIds: chipIds(form, 'role:' + r.id), deadline: r.hasDeadline ? fd.get('dl:' + r.id) || '' : '' }));
+      }
+      const saved = await S.saveTask(task, full);
       const i = D().tasks.findIndex((x) => x.id === saved.id);
       if (i >= 0) D().tasks[i] = saved; else D().tasks.push(saved);
       closeModal();
       toast(creating ? 'Đã thêm công việc.' : 'Đã lưu.');
       renderMain();
-    }, { busyEl: $('#save-btn') });
+    }, $('#save-btn'));
   }
 
-  function openCloneModal(ban) {
-    const events = [...new Set(D().tasks.filter((x) => x.ban === ban).map((x) => x.event).filter(Boolean))];
-    if (!events.length) return toast('Ban này chưa có sự kiện nào để làm mẫu.', 'error');
-    openModal(`<form id="clone-form">
-      <header class="m-head"><h3>Tạo sự kiện mới từ mẫu</h3><button type="button" class="btn ghost small x" data-act="close">✕</button></header>
+  function openCloneModal(banId) {
+    const evIds = [...new Set(D().tasks.filter((t) => t.banId === banId && t.eventId).map((t) => t.eventId))];
+    const evs = eventsSorted().filter((e) => evIds.includes(e.id));
+    if (!evs.length) return toast('Ban này chưa có sự kiện nào để làm mẫu.', 'error');
+    openModal(`<form id="clone-form">${modalHead('Tạo sự kiện mới từ mẫu', banById(banId).name)}
       <div class="m-body">
-        <p class="hint">Sao chép toàn bộ danh sách công việc của một sự kiện cũ sang sự kiện mới. Deadline, trạng thái và liên kết sẽ để trống.</p>
-        <label>Sự kiện mẫu<select name="from">${events.map((e) => `<option>${esc(e)}</option>`).join('')}</select></label>
-        <label>Tên sự kiện mới *<input name="to" required placeholder="VD: CHUYỆN NGHỀ KIỂM TOÁN"></label>
+        <p class="hint">Sao chép danh sách công việc của một sự kiện cũ sang sự kiện mới. Deadline, trạng thái và liên kết để trống.</p>
+        <label>Sự kiện mẫu<select name="from">${evs.map((e) => `<option value="${esc(e.id)}">${esc(e.name)}</option>`).join('')}</select></label>
+        <label>Tên sự kiện mới *<input name="to" required placeholder="VD: CHUYỆN NGHỀ KIỂM TOÁN" list="ev-names"></label>
+        <datalist id="ev-names">${D().events.map((e) => `<option value="${esc(e.name)}">`).join('')}</datalist>
+        <label>Ngày diễn ra<input name="date" type="date"></label>
         <label class="check"><input type="checkbox" name="keepPeople" checked> Giữ nguyên người phụ trách</label>
         <label class="check"><input type="checkbox" name="keepNotes" checked> Giữ nguyên ghi chú</label>
       </div>
@@ -533,46 +440,392 @@
     $('#clone-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const fd = new FormData(ev.target);
-      const to = (fd.get('to') || '').trim();
-      if (!to) return;
       await run(async () => {
-        const r = await api('cloneEvent', { ban, fromEvent: fd.get('from'), toEvent: to, keepPeople: !!fd.get('keepPeople'), keepNotes: !!fd.get('keepNotes') });
+        const n = await S.cloneEvent(banId, fd.get('from'), String(fd.get('to')).trim(), fd.get('date'), !!fd.get('keepPeople'), !!fd.get('keepNotes'));
         closeModal();
-        toast(`Đã tạo ${r.created} công việc cho "${to}".`);
-        state.filters[ban] = Object.assign(state.filters[ban] || {}, { event: to, status: '' });
+        toast(`Đã tạo ${n} công việc.`);
         await loadData();
-      }, { busyEl: $('#clone-btn') });
+        const created = D().events.find((e) => e.name.toLowerCase() === String(fd.get('to')).trim().toLowerCase());
+        state.filters[banId] = Object.assign(state.filters[banId] || {}, { event: created ? created.id : '', status: '' });
+        renderMain();
+      }, $('#clone-btn'));
     });
   }
 
-  /* ---------------- anti-spam ---------------- */
-  function openAntispam() {
-    const sender = D().senderEmail;
-    const ok = me().confirm === 'tin_cay';
-    openModal(`<div>
-      <header class="m-head"><h3>🛡️ Chống email nhắc việc vào Spam</h3><button type="button" class="btn ghost small x" data-act="close">✕</button></header>
+  /* ============================== Dashboard ============================== */
+  function viewDash() {
+    const f = state.dash;
+    const today = todayIso();
+    const rangeStart = f.range === 'all' ? '' : localIso(new Date(Date.now() - Number(f.range) * 86400000));
+    const tasks = D().tasks.filter((t) => !f.ban || t.banId === f.ban);
+    const open = tasks.filter((t) => !isDone(t));
+    const late = open.filter(isLate);
+    const dueWeek = open.filter((t) => t.parts.some((p) => { const d = daysUntil(p.deadline); return d !== null && d >= 0 && d <= 7; }));
+    const doneDate = (t) => (t.doneAt ? localIso(new Date(t.doneAt)) : '');
+    const doneInRange = tasks.filter((t) => isDone(t) && t.doneAt && (!rangeStart || doneDate(t) >= rangeStart));
+    const withDl = doneInRange.filter((t) => finalDeadline(t));
+    const onTime = withDl.filter((t) => doneDate(t) <= finalDeadline(t));
+    const onTimeRate = pct(onTime.length, withDl.length);
+
+    const kpi = (label, val, sub, cls = '') => `<div class="kpi ${cls}"><div class="kpi-val">${val}</div><div class="kpi-label">${label}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ''}</div>`;
+    const rangeText = { 30: '30 ngày qua', 90: '90 ngày qua', 180: '6 tháng qua', all: 'từ trước đến nay' }[f.range];
+
+    // ----- biểu đồ hoàn thành theo tuần
+    const weeks = [];
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7)); // thứ Hai tuần này
+    const nW = f.range === '30' ? 6 : f.range === '90' ? 13 : f.range === '180' ? 26 : 26;
+    for (let i = nW - 1; i >= 0; i--) { const d = new Date(start); d.setDate(d.getDate() - 7 * i); weeks.push({ from: localIso(d), onTime: 0, late: 0, noDl: 0 }); }
+    tasks.filter((t) => isDone(t) && t.doneAt).forEach((t) => {
+      const dd = doneDate(t);
+      for (let i = weeks.length - 1; i >= 0; i--) {
+        if (dd >= weeks[i].from) {
+          const fd = finalDeadline(t);
+          if (i === weeks.length - 1 || dd < weeks[i + 1].from) {
+            if (!fd) weeks[i].noDl++; else if (dd <= fd) weeks[i].onTime++; else weeks[i].late++;
+          }
+          break;
+        }
+      }
+    });
+
+    // ----- theo Ban
+    const banRows = D().bans.filter((b) => !f.ban || b.id === f.ban).map((b) => {
+      const bt = D().tasks.filter((t) => t.banId === b.id);
+      const c = { todo: 0, doing: 0, done: 0 };
+      bt.forEach((t) => { c[t.status]++; });
+      const bd = bt.filter((t) => isDone(t) && t.doneAt && (!rangeStart || doneDate(t) >= rangeStart) && finalDeadline(t));
+      const bo = bd.filter((t) => doneDate(t) <= finalDeadline(t));
+      return { b, c, total: bt.length, late: bt.filter(isLate).length, rate: pct(bo.length, bd.length), unassigned: bt.filter((t) => !isDone(t) && t.parts.some((p) => !p.assigneeIds.length && (p.deadline || banById(t.banId).roles.length === 1))).length };
+    });
+
+    // ----- theo sự kiện
+    const evRows = eventsSorted().map((e) => {
+      const et = tasks.filter((t) => t.eventId === e.id);
+      return { e, total: et.length, done: et.filter(isDone).length, late: et.filter(isLate).length, unassigned: et.filter((t) => !isDone(t) && t.parts.some((p) => !p.assigneeIds.length && p.deadline)).length };
+    }).filter((r) => r.total).sort((a, b) => {
+      const ua = a.e.date && a.e.date >= today, ub = b.e.date && b.e.date >= today;
+      if (ua !== ub) return ua ? -1 : 1;
+      return ua ? a.e.date.localeCompare(b.e.date) : (b.e.date || '').localeCompare(a.e.date || '');
+    });
+
+    // ----- theo thành viên (tính theo từng phần việc được giao)
+    const mrows = {};
+    activeMembers().filter((m) => !f.ban || m.bans.some((x) => x.banId === f.ban)).forEach((m) => { mrows[m.id] = { m, open: 0, late: 0, done: 0, withDl: 0, onTime: 0 }; });
+    tasks.forEach((t) => t.parts.forEach((p) => p.assigneeIds.forEach((mid) => {
+      const r = mrows[mid];
+      if (!r) return;
+      if (!isDone(t)) { r.open++; if (p.deadline && daysUntil(p.deadline) < 0) r.late++; return; }
+      const dd = doneDate(t);
+      if (!dd || (rangeStart && dd < rangeStart)) return;
+      r.done++;
+      if (p.deadline) { r.withDl++; if (dd <= p.deadline) r.onTime++; }
+    })));
+    const memberRows = Object.values(mrows).sort((a, b) => b.late - a.late || b.open - a.open || a.m.name.localeCompare(b.m.name, 'vi'));
+    const maxOpen = Math.max(1, ...memberRows.map((r) => r.open));
+
+    return `<div class="page-head row"><div><h2>Dashboard</h2><p class="muted">Số liệu hoàn thành tính trong <b>${rangeText}</b>.</p></div></div>
+      <div class="filters">
+        <select data-dash="ban" aria-label="Ban"><option value="">Tất cả các Ban</option>${D().bans.map((b) => `<option value="${esc(b.id)}" ${f.ban === b.id ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select>
+        <select data-dash="range" aria-label="Khoảng thời gian">${[['30', '30 ngày qua'], ['90', '90 ngày qua'], ['180', '6 tháng qua'], ['all', 'Toàn bộ']].map(([v, l]) => `<option value="${v}" ${f.range === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      </div>
+      <div class="kpis">
+        ${kpi('Việc đang mở', open.length, `${tasks.length} việc tổng cộng`)}
+        ${kpi('Đang quá hạn', late.length, late.length ? '⚠ cần xử lý' : '✓ không có', late.length ? 'danger' : 'ok')}
+        ${kpi('Đến hạn trong 7 ngày', dueWeek.length, '', dueWeek.length ? 'warn' : '')}
+        ${kpi('Hoàn thành', doneInRange.length, rangeText)}
+        ${kpi('Tỷ lệ đúng hạn', onTimeRate === null ? '—' : onTimeRate + '%', withDl.length ? `${onTime.length}/${withDl.length} việc có deadline` : 'chưa có dữ liệu', onTimeRate === null ? '' : onTimeRate >= 80 ? 'ok' : onTimeRate >= 60 ? 'warn' : 'danger')}
+      </div>
+      <div class="card"><div class="chart-head"><h3>Việc hoàn thành mỗi tuần</h3>
+        <div class="legend"><span><i class="dot c-ontime"></i>Đúng hạn</span><span><i class="dot c-late"></i>Trễ hạn</span><span><i class="dot c-nodl"></i>Không có deadline</span></div></div>
+        ${weeklyChart(weeks)}
+        <details class="table-view"><summary>Xem dạng bảng</summary><table class="mini"><thead><tr><th>Tuần từ</th><th>Đúng hạn</th><th>Trễ hạn</th><th>Không có deadline</th></tr></thead>
+          <tbody>${weeks.map((w) => `<tr><td>${fmtDate(w.from, true)}</td><td>${w.onTime}</td><td>${w.late}</td><td>${w.noDl}</td></tr>`).join('')}</tbody></table></details>
+      </div>
+      <div class="grid2">
+        <div class="card"><h3>Theo Ban</h3>
+          <div class="legend"><span><i class="dot s-done"></i>Hoàn thành</span><span><i class="dot s-doing"></i>Đang làm</span><span><i class="dot s-todo"></i>Chưa bắt đầu</span></div>
+          ${banRows.map((r) => `<div class="ban-row"><div class="ban-row-head"><b>${esc(r.b.name)}</b><span class="muted small">${r.total} việc · đúng hạn ${r.rate === null ? '—' : r.rate + '%'}</span></div>
+            <div class="stack">${['done', 'doing', 'todo'].filter((k) => r.c[k]).map((k) => `<div class="seg s-${k}" style="width:${(r.c[k] / Math.max(1, r.total)) * 100}%" data-tip="${esc(r.b.name)} – ${STATUS[k]}: ${r.c[k]} việc"></div>`).join('')}</div>
+            <div class="small">${r.late ? `<span class="badge danger">⏰ ${r.late} quá hạn</span>` : '<span class="badge ok">✓ Không quá hạn</span>'} ${r.unassigned ? `<span class="badge warn">👤 ${r.unassigned} chưa giao người</span>` : ''}</div></div>`).join('') || '<p class="muted">Chưa có Ban.</p>'}
+        </div>
+        <div class="card"><h3>Tiến độ sự kiện</h3>${evRows.length ? `<div class="table-wrap"><table class="mini"><thead><tr><th>Sự kiện</th><th>Tiến độ</th><th></th></tr></thead><tbody>
+          ${evRows.map((r) => `<tr><td><b>${esc(r.e.name)}</b><div class="muted small">${r.e.date ? '📅 ' + fmtDate(r.e.date, true) + (r.e.date >= today ? ` · còn ${daysUntil(r.e.date)} ngày` : ' · đã diễn ra') : 'Chưa có ngày'}</div></td>
+            <td style="min-width:140px"><div class="bar ok" data-tip="${r.done}/${r.total} việc hoàn thành"><div style="width:${pct(r.done, r.total)}%"></div><span>${r.done}/${r.total}</span></div></td>
+            <td>${r.late ? `<span class="badge danger">⏰ ${r.late}</span>` : ''} ${r.unassigned ? `<span class="badge warn" title="Việc có deadline nhưng chưa giao người">👤 ${r.unassigned}</span>` : ''}</td></tr>`).join('')}
+          </tbody></table></div>` : '<p class="muted">Chưa có sự kiện.</p>'}</div>
+      </div>
+      <div class="card"><h3>Theo thành viên</h3><p class="muted small">Tính theo từng phần việc được giao. "Hoàn thành" và "Đúng hạn" tính trong ${rangeText}.</p>
+        <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th><th>Đang làm</th><th>Quá hạn</th><th>Hoàn thành</th><th>Đúng hạn</th></tr></thead><tbody>
+        ${memberRows.map((r) => { const rate = pct(r.onTime, r.withDl); return `<tr><td>${esc(r.m.name)}<div class="muted small">${esc(r.m.bans.map((x) => (banById(x.banId) || {}).name).filter(Boolean).join(', '))}</div></td>
+          <td style="min-width:110px"><div class="bar" data-tip="${esc(r.m.name)}: ${r.open} việc đang mở"><div style="width:${(r.open / maxOpen) * 100}%"></div><span>${r.open}</span></div></td>
+          <td>${r.late ? `<span class="badge danger">${r.late}</span>` : '—'}</td><td>${r.done}</td>
+          <td>${rate === null ? '<span class="muted">—</span>' : `<span class="badge ${rate >= 80 ? 'ok' : rate >= 60 ? 'warn' : 'danger'}">${rate}%</span> <span class="muted small">${r.onTime}/${r.withDl}</span>`}</td></tr>`; }).join('')}
+        </tbody></table></div></div>`;
+  }
+
+  function weeklyChart(weeks) {
+    const main = $('#main');
+    const W = Math.round(Math.max(300, Math.min(1240, (main ? main.clientWidth : 800) - 70)));
+    const H = W < 500 ? 200 : 240, padL = 32, padB = 26, padT = 10;
+    const max = Math.max(4, ...weeks.map((w) => w.onTime + w.late + w.noDl));
+    const step = Math.ceil(max / 4);
+    const top = step * 4;
+    const plotH = H - padB - padT;
+    const slot = (W - padL) / weeks.length;
+    const bw = Math.min(28, slot * 0.6);
+    const y = (v) => padT + plotH - (v / top) * plotH;
+    let g = '';
+    for (let i = 0; i <= 4; i++) {
+      const v = step * i;
+      g += `<line x1="${padL}" x2="${W}" y1="${y(v)}" y2="${y(v)}" class="${i ? 'grid' : 'axis'}"/><text x="${padL - 6}" y="${y(v) + 4}" class="tick" text-anchor="end">${v}</text>`;
+    }
+    weeks.forEach((w, i) => {
+      const x = padL + slot * i + (slot - bw) / 2;
+      let base = 0;
+      const segs = [['onTime', 'c-ontime'], ['late', 'c-late'], ['noDl', 'c-nodl']].filter(([k]) => w[k]);
+      segs.forEach(([k, cls], j) => {
+        const h = (w[k] / top) * plotH;
+        const yy = y(base + w[k]);
+        const isTop = j === segs.length - 1;
+        const gap = j > 0 ? 2 : 0;
+        g += isTop
+          ? `<path class="${cls}" d="M${x},${yy + h - gap} V${yy + 4} Q${x},${yy} ${x + 4},${yy} H${x + bw - 4} Q${x + bw},${yy} ${x + bw},${yy + 4} V${yy + h - gap} Z"/>`
+          : `<rect class="${cls}" x="${x}" y="${yy}" width="${bw}" height="${Math.max(0, h - gap)}"/>`;
+        base += w[k];
+      });
+      const total = w.onTime + w.late + w.noDl;
+      g += `<rect class="hit" x="${padL + slot * i}" y="${padT}" width="${slot}" height="${plotH}" data-tip="Tuần từ ${fmtDate(w.from, true)}: ${total} việc hoàn thành — ${w.onTime} đúng hạn, ${w.late} trễ hạn, ${w.noDl} không có deadline"/>`;
+      const every = Math.ceil(weeks.length / Math.max(3, Math.floor((W - padL) / 48)));
+      if (i % every === 0) {
+        const cx = x + bw / 2;
+        const anchor = cx + 18 > W ? 'end' : 'middle';
+        g += `<text x="${anchor === 'end' ? W : cx}" y="${H - 8}" class="tick" text-anchor="${anchor}">${fmtDate(w.from)}</text>`;
+      }
+    });
+    return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Biểu đồ số việc hoàn thành mỗi tuần">${g}</svg></div>`;
+  }
+
+  /* ============================== Quản trị ============================== */
+  function viewAdmin() {
+    const tabs = [['accounts', '👥 Tài khoản'], ['bans', '🗂️ Ban & vai trò'], ['events', '📅 Sự kiện'], ['settings', '⚙️ Cài đặt']];
+    const t = state.adminTab;
+    const body = t === 'bans' ? adminBans() : t === 'events' ? adminEvents() : t === 'settings' ? adminSettings() : adminAccounts();
+    return `<div class="subtabs">${tabs.map(([id, l]) => `<button class="subtab ${id === t ? 'active' : ''}" data-act="admin-tab" data-tab="${id}">${l}</button>`).join('')}</div>${body}`;
+  }
+
+  const CONFIRM = {
+    tin_cay: ['🟢', 'Đã xác nhận', 'ok'], da_bam: ['🟡', 'Đã bấm link, chưa trả lời', 'warn'],
+    da_gui: ['🔴', 'Chưa phản hồi', 'danger'], chua_gui: ['⚪', 'Chưa gửi', 'muted'],
+  };
+
+  function adminAccounts() {
+    const q = nkey(state.acctQ);
+    const list = D().members.filter((m) => !q || nkey(m.name + ' ' + m.email).includes(q))
+      .sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name, 'vi'));
+    const unconfirmed = activeMembers().filter((m) => confirmOf(m.id) !== 'tin_cay').length;
+    const counts = {};
+    activeMembers().forEach((m) => { const s = confirmOf(m.id); counts[s] = (counts[s] || 0) + 1; });
+    return `<div class="page-head row"><div><h2>Tài khoản</h2><p class="muted">${activeMembers().length} tài khoản đang hoạt động. Email gửi từ <b>${esc(D().settings.sender_email || '(chưa cài Apps Script)')}</b>.</p></div>
+      <div class="actions">${unconfirmed ? `<button class="btn" data-act="resend-all">📧 Gửi lại email xác nhận (${unconfirmed})</button>` : ''}
+        <button class="btn primary" data-act="new-account">＋ Cấp tài khoản</button></div></div>
+      <div class="kpis small-kpis">${Object.keys(CONFIRM).map((k) => `<div class="kpi ${CONFIRM[k][2]}"><div class="kpi-val">${counts[k] || 0}</div><div class="kpi-label">${CONFIRM[k][0]} ${CONFIRM[k][1]}</div></div>`).join('')}</div>
+      <div class="filters"><input type="search" data-acct-q placeholder="Tìm theo tên hoặc email…" value="${esc(state.acctQ)}" aria-label="Tìm tài khoản"></div>
+      <div class="table-wrap"><table class="tasks"><thead><tr><th>Thành viên</th><th>Ban</th><th>Quyền</th><th>Chống spam</th><th>Trạng thái</th><th></th></tr></thead><tbody>
+      ${list.map((m) => { const c = CONFIRM[confirmOf(m.id)]; return `<tr class="${m.active ? '' : 'done'}">
+        <td><b>${esc(m.name)}</b><div class="muted small">${esc(m.email)}</div></td>
+        <td>${m.bans.map((x) => { const b = banById(x.banId); return b ? `<span class="chip ${x.isLead ? 'me' : ''}">${x.isLead ? '★ ' : ''}${esc(b.name)}</span>` : ''; }).join('') || '<span class="muted small">—</span>'}</td>
+        <td>${m.isAdmin ? '<span class="badge ok">Admin</span>' : m.bans.some((x) => x.isLead) ? '<span class="badge">Trưởng ban</span>' : '<span class="muted small">Thành viên</span>'}</td>
+        <td><span class="badge ${c[2]}">${c[0]} ${c[1]}</span></td>
+        <td>${m.active ? (m.mustChange ? '<span class="badge warn">Chưa đổi mật khẩu</span>' : '<span class="badge ok">Hoạt động</span>') : '<span class="badge muted">Đã khóa</span>'}</td>
+        <td class="row-actions"><button class="btn ghost small" data-act="edit-member" data-id="${esc(m.id)}">Sửa</button>
+          ${m.active ? `<button class="btn ghost small" data-act="reset-pw" data-id="${esc(m.id)}">Đặt lại MK</button>` : ''}
+          ${m.id !== me().id ? `<button class="btn ghost small" data-act="toggle-active" data-id="${esc(m.id)}">${m.active ? 'Khóa' : 'Mở khóa'}</button>` : ''}</td></tr>`; }).join('')}
+      </tbody></table></div>`;
+  }
+
+  function banPicker(selected) {
+    return `<div class="ban-picker">${D().bans.map((b) => { const s = selected.find((x) => x.banId === b.id); return `<div class="ban-pick">
+      <label class="check"><input type="checkbox" name="ban" value="${esc(b.id)}" ${s ? 'checked' : ''}> ${esc(b.name)}</label>
+      <label class="check small"><input type="checkbox" name="lead:${esc(b.id)}" ${s && s.isLead ? 'checked' : ''}> Trưởng ban</label></div>`; }).join('')}</div>`;
+  }
+  const readBans = (fd) => fd.getAll('ban').map((id) => ({ banId: id, isLead: !!fd.get('lead:' + id) }));
+
+  function openAccountModal() {
+    openModal(`<form id="acct-form">${modalHead('Cấp tài khoản mới')}
       <div class="m-body">
-        ${ok ? '<p class="alert ok">✅ Bạn đã hoàn tất. Email nhắc việc sẽ vào hộp thư chính.</p>' : ''}
-        <p>Email nhắc việc được gửi từ <b>${esc(sender)}</b>.</p>
-        <h4>Cách 1 – Tự động (khuyên dùng)</h4>
-        <p class="small">Website xin quyền tạm thời để tạo <b>một bộ lọc</b> trong Gmail của bạn: "Thư từ ${esc(sender)} → Không bao giờ chuyển vào Spam". Quyền được thu hồi ngay sau khi tạo xong, website không đọc thư của bạn.</p>
-        <button class="btn primary" data-act="gmail-filter" id="gf-btn">Kết nối Gmail & tạo bộ lọc</button>
-        <h4>Cách 2 – Thủ công</h4>
-        <ol class="small">
-          <li>Tìm email <b>"Xác nhận nhận email nhắc việc"</b> từ ${esc(sender)} (xem cả mục Spam) và <b>trả lời "OK"</b>.</li>
-          <li>Hoặc mở <a href="https://mail.google.com/mail/u/0/#search/from%3A${encodeURIComponent(sender)}" target="_blank" rel="noopener">Gmail</a> → bấm biểu tượng tùy chọn ở ô tìm kiếm → <b>Tạo bộ lọc</b> → tích <b>"Không bao giờ gửi vào Thư rác"</b>.</li>
-        </ol>
-      </div></div>`);
+        <p class="hint">Hệ thống tạo mật khẩu ngẫu nhiên và <b>gửi email</b> cho người này (kèm link trang PCCV và hướng dẫn chống spam). Lần đầu đăng nhập họ sẽ phải đổi mật khẩu.</p>
+        <label>Email (Gmail) *<input name="email" type="email" required placeholder="ten@gmail.com"></label>
+        <label>Họ tên *<input name="name" required></label>
+        <div class="field"><span class="lbl">Ban</span>${banPicker([])}</div>
+        <label class="check"><input type="checkbox" name="isAdmin"> Quyền <b>Admin</b> (xem Dashboard, cấp tài khoản, quản trị)</label>
+      </div>
+      <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="acct-btn">Tạo & gửi email</button></div></footer></form>`);
+    $('#acct-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const payload = { email: String(fd.get('email')).trim(), name: String(fd.get('name')).trim(), isAdmin: !!fd.get('isAdmin'), bans: readBans(fd) };
+      await run(async () => {
+        const r = await S.createAccount(payload);
+        await refreshQuiet();
+        renderMain();
+        showPassword(payload.name, payload.email, r.password, r.emailed, 'Đã cấp tài khoản');
+      }, $('#acct-btn'));
+    });
+  }
+
+  function showPassword(name, email, pw, emailed, title) {
+    openModal(`<div>${modalHead(title)}<div class="m-body">
+      <p>${emailed ? `✅ Đã gửi email cho <b>${esc(email)}</b>.` : '⚠ <b>Chưa gửi được email</b> (có thể hết hạn mức gửi hôm nay). Hãy gửi thông tin này cho người dùng qua Zalo.'}</p>
+      <div class="pw-box"><div><span class="muted small">Tài khoản</span><br><b>${esc(name)}</b> · ${esc(email)}</div>
+        <div><span class="muted small">Mật khẩu</span><br><code id="pw-val">${esc(pw)}</code></div>
+        <button class="btn small" data-act="copy-pw" data-text="${esc(`Trang PCCV: ${CFG.SITE_URL || location.origin + location.pathname}\nEmail: ${email}\nMật khẩu: ${pw}`)}">📋 Sao chép thông tin đăng nhập</button></div>
+      <p class="muted small">Mật khẩu chỉ hiện một lần. Người dùng sẽ phải đổi mật khẩu khi đăng nhập lần đầu.</p></div>
+      <footer class="m-foot"><span></span><button class="btn primary" data-act="close">Xong</button></footer></div>`);
+  }
+
+  function openMemberModal(m) {
+    openModal(`<form id="mem-form">${modalHead('Sửa thành viên', m.email)}
+      <div class="m-body">
+        <label>Họ tên *<input name="name" required value="${esc(m.name)}"></label>
+        <div class="field"><span class="lbl">Ban</span>${banPicker(m.bans)}</div>
+        <label class="check"><input type="checkbox" name="isAdmin" ${m.isAdmin ? 'checked' : ''} ${m.id === me().id ? 'disabled' : ''}> Quyền <b>Admin</b>${m.id === me().id ? ' <span class="muted small">(không tự bỏ quyền của chính mình)</span>' : ''}</label>
+        <p class="muted small">Muốn đổi email: khóa tài khoản này và cấp tài khoản mới.</p>
+      </div>
+      <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="mem-btn">Lưu</button></div></footer></form>`);
+    $('#mem-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      await run(async () => {
+        await S.updateMember({ id: m.id, name: String(fd.get('name')).trim(), isAdmin: m.id === me().id ? true : !!fd.get('isAdmin'), bans: readBans(fd) });
+        closeModal(); toast('Đã lưu.'); await refreshQuiet(); renderMain();
+      }, $('#mem-btn'));
+    });
+  }
+
+  function adminBans() {
+    return `<div class="page-head row"><div><h2>Ban & vai trò</h2><p class="muted">Mỗi vai trò là một cột "người phụ trách + deadline" trong bảng công việc của Ban (vd. Ban Truyền thông: Content / Design / Đăng bài).</p></div>
+      <div class="actions"><button class="btn primary" data-act="edit-ban">＋ Thêm Ban</button></div></div>
+      <div class="grid2">${[...D().bans].sort((a, b) => a.sort - b.sort).map((b) => {
+        const n = D().tasks.filter((t) => t.banId === b.id).length;
+        const mem = activeMembers().filter((m) => m.bans.some((x) => x.banId === b.id));
+        return `<div class="card"><div class="row-between"><h3>${esc(b.name)}</h3><button class="btn ghost small" data-act="edit-ban" data-id="${esc(b.id)}">Sửa</button></div>
+          <p class="small">Vai trò: ${b.roles.map((r) => `<span class="chip">${esc(r.label)}${r.hasDeadline ? '' : ' (không deadline)'}</span>`).join('') || '<span class="muted">chưa có</span>'}</p>
+          <p class="muted small">${n} công việc · ${mem.length} thành viên · Trưởng ban: ${esc(mem.filter((m) => m.bans.some((x) => x.banId === b.id && x.isLead)).map((m) => m.name).join(', ') || 'chưa có')}</p></div>`;
+      }).join('')}</div>`;
+  }
+
+  function openBanModal(b) {
+    const creating = !b;
+    b = b || { name: '', sort: D().bans.length + 1, roles: [{ label: 'Phụ trách', hasDeadline: true }] };
+    const roleRow = (r) => `<div class="role-row" data-role-id="${esc(r.id || '')}">
+      <input name="roleLabel" value="${esc(r.label)}" placeholder="Tên vai trò (vd. Content)" required aria-label="Tên vai trò">
+      <label class="check small"><input type="checkbox" name="roleDl" ${r.hasDeadline ? 'checked' : ''}> Có deadline</label>
+      <button type="button" class="btn ghost small" data-act="role-up" aria-label="Lên">↑</button>
+      <button type="button" class="btn ghost small" data-act="role-x" aria-label="Xóa vai trò">✕</button></div>`;
+    openModal(`<form id="ban-form">${modalHead(creating ? 'Thêm Ban' : 'Sửa Ban')}
+      <div class="m-body">
+        <label>Tên Ban *<input name="name" required value="${esc(b.name)}" placeholder="VD: Ban Nhân sự"></label>
+        <label>Thứ tự hiển thị<input name="sort" type="number" value="${esc(b.sort)}"></label>
+        <div class="field"><span class="lbl">Vai trò trong công việc</span><div id="roles">${b.roles.map(roleRow).join('')}</div>
+          <button type="button" class="btn ghost small" data-act="role-add">＋ Thêm vai trò</button>
+          <p class="muted small">⚠ Xóa một vai trò sẽ xóa luôn người phụ trách & deadline của vai trò đó trong mọi công việc.</p></div>
+      </div>
+      <footer class="m-foot">${creating ? '<span></span>' : `<button type="button" class="btn danger-ghost" data-act="delete-ban" data-id="${esc(b.id)}">Xóa Ban</button>`}
+        <div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="ban-btn">Lưu</button></div></footer></form>`);
+    $('#ban-form').dataset.roleTpl = roleRow({ label: '', hasDeadline: true });
+    $('#ban-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const form = ev.target;
+      const roles = $$('.role-row', form).map((row) => ({ id: row.dataset.roleId || null, label: row.querySelector('[name=roleLabel]').value.trim(), hasDeadline: row.querySelector('[name=roleDl]').checked }));
+      if (!roles.length) return toast('Ban cần ít nhất 1 vai trò.', 'error');
+      const keep = roles.map((r) => r.id).filter(Boolean);
+      const removed = creating ? [] : b.roles.map((r) => r.id).filter((id) => !keep.includes(id));
+      if (removed.length && !confirm(`Xóa ${removed.length} vai trò? Người phụ trách & deadline của vai trò này trong mọi công việc sẽ mất.`)) return;
+      await run(async () => {
+        await S.saveBan({ id: b.id, name: form.name.value.trim(), sort: Number(form.sort.value) || 0, roles }, removed);
+        closeModal(); toast('Đã lưu Ban.'); await refreshQuiet(); renderMain();
+      }, $('#ban-btn'));
+    });
+  }
+
+  function adminEvents() {
+    const today = todayIso();
+    return `<div class="page-head row"><div><h2>Sự kiện</h2><p class="muted">Một sự kiện có thể có công việc ở nhiều Ban.</p></div>
+      <div class="actions"><button class="btn primary" data-act="edit-event">＋ Thêm sự kiện</button></div></div>
+      <div class="table-wrap"><table class="tasks"><thead><tr><th>Sự kiện</th><th>Ngày diễn ra</th><th>Công việc</th><th></th></tr></thead><tbody>
+      ${eventsSorted().map((e) => { const et = D().tasks.filter((t) => t.eventId === e.id); return `<tr>
+        <td><b>${esc(e.name)}</b></td>
+        <td>${e.date ? fmtDate(e.date, true) + (e.date >= today ? ' <span class="badge">sắp tới</span>' : '') : '<span class="muted">—</span>'}</td>
+        <td>${D().bans.map((b) => { const n = et.filter((t) => t.banId === b.id).length; return n ? `<span class="chip">${esc(b.name)}: ${et.filter((t) => t.banId === b.id && isDone(t)).length}/${n}</span>` : ''; }).join('') || '<span class="muted small">chưa có</span>'}</td>
+        <td><button class="btn ghost small" data-act="edit-event" data-id="${esc(e.id)}">Sửa</button></td></tr>`; }).join('') || '<tr><td colspan="4" class="muted">Chưa có sự kiện.</td></tr>'}
+      </tbody></table></div>`;
+  }
+
+  function openEventModal(e) {
+    const creating = !e;
+    e = e || { name: '', date: '' };
+    openModal(`<form id="ev-form">${modalHead(creating ? 'Thêm sự kiện' : 'Sửa sự kiện')}
+      <div class="m-body"><label>Tên sự kiện *<input name="name" required value="${esc(e.name)}"></label>
+        <label>Ngày diễn ra<input name="date" type="date" value="${esc(e.date)}"></label></div>
+      <footer class="m-foot">${creating ? '<span></span>' : `<button type="button" class="btn danger-ghost" data-act="delete-event" data-id="${esc(e.id)}">Xóa</button>`}
+        <div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="ev-btn">Lưu</button></div></footer></form>`);
+    $('#ev-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const f = ev.target;
+      await run(async () => { await S.saveEvent({ id: e.id, name: f.name.value, date: f.date.value }); closeModal(); toast('Đã lưu sự kiện.'); await refreshQuiet(); renderMain(); }, $('#ev-btn'));
+    });
+  }
+
+  function adminSettings() {
+    const s = D().settings;
+    return `<div class="page-head"><h2>Cài đặt nhắc việc</h2></div>
+      <form class="card settings" id="settings-form">
+        <label>Nhắc trước deadline bao nhiêu ngày<input name="reminder_days" type="number" min="0" max="14" value="${esc(s.reminder_days ?? 1)}"></label>
+        <label>Nhắc việc quá hạn trong tối đa bao nhiêu ngày<input name="overdue_max_days" type="number" min="0" max="60" value="${esc(s.overdue_max_days ?? 7)}"></label>
+        <p class="muted small">Mỗi sáng (8–9h) hệ thống gửi <b>một email tổng hợp</b> cho từng người. Mỗi mốc chỉ nhắc 1 lần; đổi deadline thì nhắc lại theo deadline mới.
+          Trưởng ban nhận thêm bản tổng hợp tuần vào thứ Hai.</p>
+        <p class="small">Địa chỉ gửi mail: <b>${esc(s.sender_email || '(chưa cài Apps Script)')}</b></p>
+        <div><button class="btn primary" id="settings-btn">Lưu cài đặt</button></div>
+      </form>`;
+  }
+
+  async function refreshQuiet() { state.data = await S.loadAll(); }
+
+  /* ============================== Chống spam ============================== */
+  function openAntispam() {
+    const sender = D().settings.sender_email || '';
+    const ok = confirmOf(me().id) === 'tin_cay';
+    const canAuto = !!CFG.GOOGLE_CLIENT_ID || S.demo;
+    openModal(`<div>${modalHead('🛡️ Chống email nhắc việc vào Spam')}<div class="m-body">
+      ${ok ? '<p class="alert ok">✅ Bạn đã hoàn tất. Email nhắc việc sẽ vào hộp thư chính.</p>' : ''}
+      <p>Email nhắc việc được gửi từ <b>${esc(sender || '(chưa cấu hình)')}</b>.</p>
+      ${canAuto ? `<h4>Cách 1 – Tự động</h4>
+        <p class="small">Website xin quyền tạm thời để tạo <b>một bộ lọc</b> trong Gmail của bạn: "Thư từ ${esc(sender)} → Không bao giờ chuyển vào Spam". Quyền được thu hồi ngay sau khi tạo xong; website không đọc thư của bạn.</p>
+        <button class="btn primary" data-act="gmail-filter">Kết nối Gmail & tạo bộ lọc</button>` : ''}
+      <h4>${canAuto ? 'Cách 2 – ' : ''}Thủ công</h4>
+      <ol class="small"><li>Tìm email <b>"Tài khoản PCCV của bạn"</b> từ ${esc(sender)} (xem cả mục Spam) và <b>trả lời "OK"</b>.</li>
+        <li>Hoặc mở <a href="https://mail.google.com/mail/u/0/#search/from%3A${encodeURIComponent(sender)}" target="_blank" rel="noopener">Gmail</a> → biểu tượng tùy chọn ở ô tìm kiếm → <b>Tạo bộ lọc</b> → tích <b>"Không bao giờ gửi vào Thư rác"</b>.</li></ol>
+    </div></div>`);
+  }
+
+  function loadGis() {
+    return new Promise((resolve, reject) => {
+      if (window.google && google.accounts && google.accounts.oauth2) return resolve();
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client';
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Không tải được Google.'));
+      document.head.appendChild(s);
+    });
   }
 
   async function createGmailFilter(btn) {
-    const sender = D().senderEmail;
-    if (DEMO) {
-      await run(async () => { await api('markFilter'); me().confirm = 'tin_cay'; closeModal(); toast('(Demo) Đã tạo bộ lọc Gmail.'); render(); }, { busyEl: btn });
-      return;
-    }
-    if (!(window.google && google.accounts && google.accounts.oauth2)) return toast('Chưa tải xong Google, thử lại sau vài giây.', 'error');
+    const sender = D().settings.sender_email;
+    if (S.demo) return run(async () => { await S.markFilter(); await refreshQuiet(); closeModal(); toast('(Demo) Đã tạo bộ lọc Gmail.'); render(); }, btn);
+    if (!sender) return toast('Admin chưa cài máy chủ gửi mail.', 'error');
     btn.disabled = true;
+    try { await loadGis(); } catch (e) { btn.disabled = false; return toast(e.message, 'error'); }
     const client = google.accounts.oauth2.initTokenClient({
       client_id: CFG.GOOGLE_CLIENT_ID,
       scope: 'https://www.googleapis.com/auth/gmail.settings.basic',
@@ -584,60 +837,108 @@
         try {
           const list = await fetch(url, { headers: { Authorization: 'Bearer ' + at } }).then((r) => r.json());
           if (list.error) throw new Error(list.error.message);
-          const exists = (list.filter || []).some((f) => f.criteria && String(f.criteria.from || '').toLowerCase().includes(sender.toLowerCase()) &&
-            f.action && (f.action.removeLabelIds || []).includes('SPAM'));
+          const exists = (list.filter || []).some((f) => String((f.criteria || {}).from || '').toLowerCase().includes(sender.toLowerCase()) && ((f.action || {}).removeLabelIds || []).includes('SPAM'));
           if (!exists) {
-            const r = await fetch(url, {
-              method: 'POST', headers: { Authorization: 'Bearer ' + at, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ criteria: { from: sender }, action: { removeLabelIds: ['SPAM'] } }),
-            });
-            const j = await r.json();
-            if (!r.ok) throw new Error((j.error && j.error.message) || 'Không tạo được bộ lọc');
+            const r = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + at, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ criteria: { from: sender }, action: { removeLabelIds: ['SPAM'] } }) });
+            if (!r.ok) { const j = await r.json(); throw new Error((j.error && j.error.message) || 'Không tạo được bộ lọc'); }
           }
           google.accounts.oauth2.revoke(at, () => {});
-          await api('markFilter');
-          me().confirm = 'tin_cay';
-          closeModal();
-          toast('✅ Đã tạo bộ lọc! Email nhắc việc sẽ không vào Spam nữa.');
-          render();
+          await S.markFilter();
+          await refreshQuiet();
+          closeModal(); toast('✅ Đã tạo bộ lọc! Email nhắc việc sẽ không vào Spam nữa.'); render();
         } catch (e) {
           google.accounts.oauth2.revoke(at, () => {});
-          toast('Lỗi: ' + e.message, 'error');
-          btn.disabled = false;
+          toast('Lỗi: ' + e.message, 'error'); btn.disabled = false;
         }
       },
-      error_callback: (err) => { btn.disabled = false; toast('Đã hủy kết nối Gmail' + (err && err.type ? ' (' + err.type + ')' : ''), 'error'); },
+      error_callback: () => { btn.disabled = false; toast('Đã hủy kết nối Gmail.', 'error'); },
     });
     client.requestAccessToken();
   }
 
-  /* ---------------- events ---------------- */
-  const findTask = (id) => D().tasks.find((t) => t.id === id);
+  /* ============================== tooltip ============================== */
+  const tip = document.createElement('div');
+  tip.className = 'tip';
+  tip.setAttribute('role', 'tooltip');
+  document.body.appendChild(tip);
+  document.addEventListener('mousemove', (ev) => {
+    const el = ev.target.closest && ev.target.closest('[data-tip]');
+    if (!el) { tip.classList.remove('show'); return; }
+    tip.textContent = el.getAttribute('data-tip');
+    tip.classList.add('show');
+    const r = tip.getBoundingClientRect();
+    let x = ev.clientX + 14, y = ev.clientY + 14;
+    if (x + r.width > window.innerWidth - 8) x = ev.clientX - r.width - 14;
+    if (y + r.height > window.innerHeight - 8) y = ev.clientY - r.height - 14;
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  });
 
-  document.addEventListener('click', async (ev) => {
-    const el = ev.target.closest('[data-act]');
-    if (!el) return;
-    const act = el.dataset.act;
-    if (act === 'view') { state.view = el.dataset.view; store.set('view', state.view); render(); window.scrollTo(0, 0); }
-    else if (act === 'demo-login') { state.demoEmail = $('#demo-user').value; store.set('demoEmail', state.demoEmail); loadData(); }
-    else if (act === 'logout') logout();
-    else if (act === 'reload') loadData();
-    else if (act === 'edit') openTaskModal(findTask(el.dataset.id));
-    else if (act === 'new') openTaskModal(null, el.dataset.ban);
-    else if (act === 'clone') openCloneModal(el.dataset.ban);
-    else if (act === 'close') closeModal();
-    else if (act === 'chip-x') el.closest('.chip').remove();
-    else if (act === 'antispam') openAntispam();
-    else if (act === 'gmail-filter') createGmailFilter(el);
-    else if (act === 'confirm-reload') loadConfirms();
-    else if (act === 'send-welcome') {
-      if (!confirm('Gửi email xác nhận cho tất cả thành viên chưa nhận?')) return;
-      await run(async () => { const r = await api('sendWelcome'); toast(`Đã gửi ${r.sent} email.`); await loadConfirms(); }, { busyEl: el });
-    } else if (act === 'delete') {
+  /* ============================== sự kiện ============================== */
+  const findTask = (id) => D().tasks.find((t) => t.id === id);
+  const actions = {
+    view: (el) => { state.view = el.dataset.view; ss.set('view', state.view); render(); window.scrollTo(0, 0); },
+    'admin-tab': (el) => { state.adminTab = el.dataset.tab; ss.set('adminTab', state.adminTab); renderMain(); },
+    logout: async () => { await S.signOut(); state.data = null; renderLogin(); },
+    reload: () => loadData(),
+    edit: (el) => openTaskModal(findTask(el.dataset.id)),
+    new: (el) => openTaskModal(null, el.dataset.ban),
+    clone: (el) => openCloneModal(el.dataset.ban),
+    close: () => closeModal(),
+    'chip-x': (el) => el.closest('.chip').remove(),
+    'link-add': () => $('#links').insertAdjacentHTML('beforeend', linkRow({ label: '', url: '' }, false)),
+    'link-x': (el) => el.closest('.link-row').remove(),
+    antispam: () => openAntispam(),
+    'gmail-filter': (el) => createGmailFilter(el),
+    'change-pw': () => {
+      openModal(`<form id="pw-form">${modalHead('Đổi mật khẩu')}<div class="m-body">${pwFields()}</div>
+        <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary">Lưu</button></div></footer></form>`);
+      bindPwForm($('#pw-form'), async () => closeModal());
+    },
+    delete: async (el) => {
       const t = findTask(el.dataset.id);
-      if (!confirm(`Xóa công việc "${t.name}"? Dòng này sẽ bị xóa khỏi Google Sheet.`)) return;
-      await run(async () => { await api('deleteTask', { ban: t.ban, row: t.row, expectName: t.name }); closeModal(); toast('Đã xóa.'); await loadData(); }, { busyEl: el });
-    }
+      if (!confirm(`Xóa công việc "${t.name}"?`)) return;
+      await run(async () => { await S.deleteTask(t.id); D().tasks = D().tasks.filter((x) => x.id !== t.id); closeModal(); toast('Đã xóa.'); renderMain(); }, el);
+    },
+    'new-account': () => openAccountModal(),
+    'edit-member': (el) => openMemberModal(memberById(el.dataset.id)),
+    'reset-pw': async (el) => {
+      const m = memberById(el.dataset.id);
+      if (!confirm(`Đặt lại mật khẩu cho ${m.name}? Mật khẩu mới sẽ được gửi tới ${m.email}.`)) return;
+      await run(async () => { const r = await S.resetPassword(m.id); await refreshQuiet(); renderMain(); showPassword(m.name, m.email, r.password, r.emailed, 'Đã đặt lại mật khẩu'); }, el);
+    },
+    'toggle-active': async (el) => {
+      const m = memberById(el.dataset.id);
+      if (!confirm(m.active ? `Khóa tài khoản ${m.name}? Người này sẽ không đăng nhập được và không nhận email nữa.` : `Mở khóa tài khoản ${m.name}?`)) return;
+      await run(async () => { await S.setActive(m.id, !m.active); await refreshQuiet(); renderMain(); toast(m.active ? 'Đã khóa.' : 'Đã mở khóa.'); }, el);
+    },
+    'resend-all': async (el) => {
+      if (!confirm('Gửi lại email xác nhận cho tất cả người chưa xác nhận?')) return;
+      await run(async () => { const r = await S.resendConfirm(); await refreshQuiet(); renderMain(); toast(`Đã gửi ${r.sent} email.`); }, el);
+    },
+    'copy-pw': async (el) => {
+      try { await navigator.clipboard.writeText(el.dataset.text); toast('Đã sao chép.'); } catch (e) { toast('Không sao chép được – hãy tự chọn và copy.', 'error'); }
+    },
+    'edit-ban': (el) => openBanModal(el.dataset.id ? banById(el.dataset.id) : null),
+    'role-add': () => $('#roles').insertAdjacentHTML('beforeend', $('#ban-form').dataset.roleTpl),
+    'role-x': (el) => el.closest('.role-row').remove(),
+    'role-up': (el) => { const row = el.closest('.role-row'); if (row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling); },
+    'delete-ban': async (el) => {
+      const b = banById(el.dataset.id);
+      if (!confirm(`Xóa "${b.name}"? Chỉ xóa được khi Ban không còn công việc nào.`)) return;
+      await run(async () => { await S.deleteBan(b.id); closeModal(); toast('Đã xóa Ban.'); await refreshQuiet(); render(); }, el);
+    },
+    'edit-event': (el) => openEventModal(el.dataset.id ? eventById(el.dataset.id) : null),
+    'delete-event': async (el) => {
+      const e = eventById(el.dataset.id);
+      if (!confirm(`Xóa sự kiện "${e.name}"? Các công việc của sự kiện vẫn giữ lại nhưng không thuộc sự kiện nào.`)) return;
+      await run(async () => { await S.deleteEvent(e.id); closeModal(); toast('Đã xóa sự kiện.'); await refreshQuiet(); renderMain(); }, el);
+    },
+  };
+
+  document.addEventListener('click', (ev) => {
+    const el = ev.target.closest('[data-act]');
+    if (el && actions[el.dataset.act]) { ev.preventDefault(); actions[el.dataset.act](el); }
   });
 
   document.addEventListener('change', async (ev) => {
@@ -647,44 +948,56 @@
       const prev = t.status;
       el.disabled = true;
       await run(async () => {
-        const saved = await api('saveTask', { ban: t.ban, row: t.row, expectName: t.name, task: { status: el.value } });
+        const saved = await S.saveTask(Object.assign({}, t, { status: el.value }), false);
         Object.assign(t, saved);
-        toast(el.value === D().doneStatus ? '🎉 Đã hoàn thành!' : 'Đã cập nhật trạng thái.');
+        toast(el.value === 'done' ? '🎉 Đã hoàn thành!' : 'Đã cập nhật trạng thái.');
         renderMain();
       });
       if (t.status === prev) { el.value = prev; el.disabled = false; }
     } else if (el.dataset.change === 'chip-add') {
-      const name = el.value;
-      if (!name) return;
+      const id = el.value;
+      if (!id) return;
       const box = el.closest('.people').querySelector('.chips');
-      if (!$$('.chip', box).some((c) => c.dataset.name === name)) {
-        box.insertAdjacentHTML('beforeend', `<span class="chip" data-name="${esc(name)}">${esc(name)}<button type="button" data-act="chip-x" aria-label="Bỏ">×</button></span>`);
+      if (!$$('.chip', box).some((c) => c.dataset.id === id)) {
+        box.insertAdjacentHTML('beforeend', `<span class="chip" data-id="${esc(id)}">${esc(mName(id))}<button type="button" data-act="chip-x" aria-label="Bỏ">×</button></span>`);
       }
       el.value = '';
+    } else if (el.dataset.change === 'event-select') {
+      el.parentNode.querySelector('.new-event').classList.toggle('hidden', el.value !== '__new');
     } else if (el.dataset.filter && el.tagName === 'SELECT') {
-      const ban = $('#ban-body').dataset.ban;
-      state.filters[ban][el.dataset.filter] = el.value;
+      state.filters[$('#ban-body').dataset.ban][el.dataset.filter] = el.value;
       renderBanBody();
+    } else if (el.dataset.dash) {
+      state.dash[el.dataset.dash] = el.value;
+      renderMain();
     }
   });
 
   document.addEventListener('input', (ev) => {
     const el = ev.target;
-    if (el.dataset.filter === 'q') {
-      const ban = $('#ban-body').dataset.ban;
-      state.filters[ban].q = el.value;
-      renderBanBody();
+    if (el.dataset.filter === 'q') { state.filters[$('#ban-body').dataset.ban].q = el.value; renderBanBody(); }
+    else if (el.hasAttribute('data-acct-q')) {
+      state.acctQ = el.value;
+      const pos = el.selectionStart;
+      renderMain();
+      const n = $('[data-acct-q]'); n.focus(); n.setSelectionRange(pos, pos);
     }
+  });
+
+  document.addEventListener('submit', async (ev) => {
+    if (ev.target.id !== 'settings-form') return;
+    ev.preventDefault();
+    const f = ev.target;
+    await run(async () => {
+      await S.saveSettings({ reminder_days: Number(f.reminder_days.value), overdue_max_days: Number(f.overdue_max_days.value) });
+      await refreshQuiet(); toast('Đã lưu cài đặt.');
+    }, $('#settings-btn'));
   });
 
   $('#modal').addEventListener('click', (ev) => { if (ev.target.id === 'modal') closeModal(); });
 
-  /* ---------------- start ---------------- */
-  if (DEMO) {
-    state.demoEmail = store.get('demoEmail');
-    if (state.demoEmail) loadData(); else renderLogin();
-  } else {
-    const t = store.get('idToken');
-    if (t && jwtExp(t) > Date.now() + 60000) { state.token = t; loadData(); } else renderLogin();
-  }
+  /* ============================== khởi động ============================== */
+  (async () => {
+    try { if (await S.init()) await loadData(); else renderLogin(); } catch (e) { renderLogin(e.message); }
+  })();
 })();
