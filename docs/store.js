@@ -82,10 +82,10 @@
         await q(sb.rpc('mark_password_changed'));
       },
       async loadAll() {
-        const [bans, roles, members, mbs, events, tasks, parts, settings, confirms, campaigns, checks] = await Promise.all([
+        const [bans, roles, members, mbs, events, tasks, parts, settings, confirms, campaigns, checks, scans] = await Promise.all([
           all('bans', 'sort'), all('ban_roles', 'sort'), all('members', 'name'), all('member_bans'),
           all('events'), all('tasks', 'created_at'), all('task_parts'), all('settings'), all('email_confirm'),
-          all('seeding_campaigns', 'created_at'), all('seeding_checks'),
+          all('seeding_campaigns', 'created_at'), all('seeding_checks'), all('seeding_scans', 'created_at'),
         ]);
         const meRow = members.find((m) => m.user_id === userId);
         if (!meRow || !meRow.active) throw err('Tài khoản của bạn chưa được cấp quyền hoặc đã bị khóa. Liên hệ admin.', 'NOT_MEMBER');
@@ -100,6 +100,7 @@
           tasks: tasks.map((t) => mapTask(t, parts)),
           settings: s, confirms: c, meId: meRow.id,
           campaigns: campaigns.map(mapCampaign).reverse(), checks: checks.map(mapCheck),
+          scans: scans.map((x) => ({ campaignId: x.campaign_id, action: x.action, names: x.names || [], createdAt: x.created_at })),
         };
       },
       async saveTask(t, full) {
@@ -156,6 +157,10 @@
         return mapCampaign(r);
       },
       async deleteCampaign(id) { await q(sb.from('seeding_campaigns').delete().eq('id', id)); },
+      async saveScan(campaignId, action, names, postUrl, by) {
+        const r = await q(sb.from('seeding_scans').insert({ campaign_id: campaignId, action, names, post_url: postUrl || '', created_by: by }).select().single());
+        return { campaignId: r.campaign_id, action: r.action, names: r.names || [], createdAt: r.created_at };
+      },
       async saveCheck(x) {
         const r = await q(sb.from('seeding_checks').upsert({ campaign_id: x.campaignId, member_id: x.memberId, action: x.action, self_done: x.selfDone, proof_url: x.proofUrl || '' },
           { onConflict: 'campaign_id,member_id,action' }).select().single());
@@ -201,7 +206,7 @@
       tasks: [],
       settings: { reminder_days: 1, overdue_max_days: 7, sender_email: 'nhacviec.demo@gmail.com' },
       confirms: {},
-      campaigns: [], checks: [],
+      campaigns: [], checks: [], scans: [],
     };
     const add = (banId, eventId, name, status, parts, opts = {}) => {
       const t = { id: uid(), banId, eventId, name, status, note: opts.note || '', leadIds: opts.lead || [], links: opts.links || [],
@@ -260,7 +265,7 @@
       async loadAll() {
         await wait();
         if (!me()) throw err('Hãy chọn người dùng demo.', 'NOT_MEMBER');
-        return clone({ bans: db.bans, members: db.members, events: db.events, tasks: db.tasks, settings: db.settings, confirms: db.confirms, campaigns: db.campaigns, checks: db.checks, meId });
+        return clone({ bans: db.bans, members: db.members, events: db.events, tasks: db.tasks, settings: db.settings, confirms: db.confirms, campaigns: db.campaigns, checks: db.checks, scans: db.scans, meId });
       },
       async saveTask(t, full) {
         await wait();
@@ -325,6 +330,7 @@
         Object.assign(row, { title: c.title, postUrl: c.postUrl, actions: c.actions, deadline: c.deadline || '', memberIds: c.memberIds, banId: c.banId || null });
         return clone(row);
       },
+      async saveScan(campaignId, action, names) { await wait(); const x = { campaignId, action, names, createdAt: new Date().toISOString() }; db.scans.push(x); return clone(x); },
       async deleteCampaign(id) { await wait(); db.campaigns = db.campaigns.filter((x) => x.id !== id); db.checks = db.checks.filter((x) => x.campaignId !== id); },
       async saveCheck(x) {
         await wait();

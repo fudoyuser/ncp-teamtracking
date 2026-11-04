@@ -145,6 +145,10 @@
       const pend = ss.get('seedImport');
       if (pend) { try { if (JSON.parse(decodeURIComponent(escape(atob(pend)))).kind !== 'profile') state.view = 'seeding'; } catch (e) { /* bỏ qua */ } }
       render();
+      if (canSeed() && (D().scans || []).length) {
+        // Tự đối chiếu lại seeding theo tên/link Facebook mới nhất mỗi khi admin/trưởng ban mở trang
+        rematchAll().then((n) => { if (n) { renderMain(); toast(`🔄 Seeding đã tự cập nhật theo tên Facebook mới: ${n} thay đổi.`); } }).catch(() => {});
+      }
       if (pend) {
         try { sessionStorage.removeItem('seedImport'); } catch (e) { /* bỏ qua */ }
         try { openSeedImport(JSON.parse(decodeURIComponent(escape(atob(pend))))); } catch (e) { toast('Dữ liệu từ Facebook không đọc được.', 'error'); }
@@ -538,6 +542,37 @@
         ${list.length ? list.map(allCard).join('') : '<div class="empty">Chưa có đợt seeding nào.</div>'}</section>`;
   }
 
+  const latestScan = (cid, action) => (D().scans || []).filter((x) => x.campaignId === cid && x.action === action)
+    .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)))[0] || null;
+  async function storeScan(cid, action, names, post) {
+    try {
+      const x = await S.saveScan(cid, action, names, post || '', me().id);
+      (D().scans = D().scans || []).push(x);
+    } catch (e) { console.warn('Không lưu được danh sách quét', e); }
+  }
+  /** Đối chiếu lại mọi đợt có danh sách quét đã lưu, với tên/link Facebook hiện tại. Trả về số ô thay đổi. */
+  async function rematchAll() {
+    let changed = 0;
+    const ms = participants().map(memberById).filter(Boolean);
+    for (const c of D().campaigns || []) {
+      for (const a of scanActs(c)) {
+        const sc = latestScan(c.id, a);
+        if (!sc) continue;
+        const res = matchNames(sc.names.map((x) => x.name).join('\n'), ms, sc.names.map((x) => x.url));
+        const diff = res.filter((r) => { const ch = checkOf(c.id, r.m.id, a); const want = r.found ? 'found' : 'not_found'; return !ch || ch.verified !== want; });
+        if (!diff.length) continue;
+        const saved = await S.verifyChecks(c.id, a, diff.map((r) => ({ memberId: r.m.id, verified: r.found ? 'found' : 'not_found' })));
+        saved.forEach((x) => { const i = D().checks.findIndex((y) => y.campaignId === x.campaignId && y.memberId === x.memberId && y.action === x.action); if (i >= 0) D().checks[i] = x; else D().checks.push(x); });
+        changed += diff.length;
+      }
+    }
+    return changed;
+  }
+  const quietRematch = async () => {
+    if (!canSeed() || !(D().scans || []).length) return;
+    try { const n = await rematchAll(); if (n) toast(`🔄 Đã đối chiếu lại seeding: ${n} ô thay đổi.`); } catch (e) { /* bỏ qua */ }
+  };
+
   function seedStats(banId) {
     const list = D().campaigns || [];
     const ms = activeMembers().filter((m) => !banId || m.bans.some((b) => b.banId === banId));
@@ -631,7 +666,8 @@
     const done = rows.filter((m) => memberDone(c, m.id)).length;
     openModal(`<div class="wide">${modalHead(esc(c.title), `${done}/${rows.length} người hoàn thành`)}
       <div class="m-body">
-        <p class="small">${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết trên Facebook ↗</a> · ` : ''}${c.deadline ? 'Hạn ' + fmtDate(c.deadline, true) : 'Không có hạn'}</p>
+        <p class="small">${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết trên Facebook ↗</a> · ` : ''}${c.deadline ? 'Hạn ' + fmtDate(c.deadline, true) : 'Không có hạn'}
+          · Lần quét gần nhất: ${scanActs(c).map((a) => { const sc = latestScan(c.id, a); return ACTIONS[a] + ' ' + (sc ? new Date(sc.createdAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) + ` (${sc.names.length} tên)` : '<span class="badge warn">chưa lưu – cần quét lại</span>'); }).join(' · ')}</p>
         ${lead ? `<div class="hint"><b>Đối chiếu:</b> mở bài trên Facebook → bấm vào số lượt cảm xúc / bình luận / chia sẻ → bôi đen cả danh sách tên → copy → bấm nút bên dưới và dán vào.
           <div class="seed-verify-btns">${scanActs(c).map((a) => `<button class="btn small" data-act="seed-verify" data-id="${esc(c.id)}" data-action="${a}">📋 Đối chiếu ${ACTIONS[a]}</button>`).join('')}</div></div>` : ''}
         <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${c.actions.map((a) => `<th>${ACTIONS[a]}${BONUS.includes(a) ? ' <span class="muted small">(+điểm)</span>' : ''}</th>`).join('')}<th>Hoàn thành</th></tr></thead><tbody>
@@ -727,6 +763,8 @@
       ev.preventDefault();
       const res = preview();
       await run(async () => {
+        const names = prefill ? prefill.names : f.text.value.split(/[\n\r]+/).map((l) => l.trim()).filter(Boolean).map((n) => ({ name: n, url: '' }));
+        await storeScan(c.id, action, names, prefill ? prefill.post : c.postUrl);
         const saved = await S.verifyChecks(c.id, action, res.map((r) => ({ memberId: r.m.id, verified: r.found ? 'found' : 'not_found' })));
         saved.forEach((x) => {
           const i = D().checks.findIndex((y) => y.campaignId === x.campaignId && y.memberId === x.memberId && y.action === x.action);
@@ -838,6 +876,7 @@
           Object.assign(r.m, { fbName: name, fbUrl: url });
         }
         toast(`Đã cập nhật Facebook cho ${pick.length} người.`);
+        await quietRematch();
         renderMain(); openFbUpdateList();
       }, $('#batch-btn'));
     });
@@ -868,6 +907,7 @@
         Object.assign(memberById(mid), { fbName: p.name, fbUrl: p.url });
         try { localStorage.removeItem(FB_TARGET); } catch (e) { /* bỏ qua */ }
         toast(`Đã lưu Facebook cho ${memberById(mid).name}.`);
+        await quietRematch();
         renderMain(); openFbUpdateList();
       }, $('#prof-btn'));
     });
@@ -902,6 +942,7 @@
       ev.preventDefault();
       await run(async () => {
         for (const a of acts) {
+          await storeScan(c.id, a, p.lists[a], p.post);
           const saved = await S.verifyChecks(c.id, a, ms.map((m) => ({ memberId: m.id, verified: res[a].get(m.id) ? 'found' : 'not_found' })));
           saved.forEach((x) => {
             const i = D().checks.findIndex((y) => y.campaignId === x.campaignId && y.memberId === x.memberId && y.action === x.action);
@@ -1184,7 +1225,7 @@
       const fd = new FormData(ev.target);
       await run(async () => {
         await S.updateMember({ id: m.id, name: String(fd.get('name')).trim(), isAdmin: m.id === me().id ? true : !!fd.get('isAdmin'), bans: readBans(fd), fbName: String(fd.get('fbName') || '').trim(), fbUrl: String(fd.get('fbUrl') || '').trim() });
-        closeModal(); toast('Đã lưu.'); await refreshQuiet(); renderMain();
+        closeModal(); toast('Đã lưu.'); await refreshQuiet(); await quietRematch(); renderMain();
       }, $('#mem-btn'));
     });
   }
@@ -1450,6 +1491,7 @@
         Object.assign(m, { fbName: name, fbUrl: url });
         row.querySelector('td:nth-child(4)').innerHTML = fbStatus(m);
         toast(`Đã lưu Facebook cho ${m.name}.`);
+        quietRematch();
       }, el);
     },
     'seed-new': () => openSeedForm(null),

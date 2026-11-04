@@ -78,3 +78,20 @@ create policy own_or_lead_update on public.seeding_checks for update
   using (is_admin() or is_any_lead() or member_id = my_member_id())
   with check (is_admin() or is_any_lead() or member_id = my_member_id());
 create policy lead_delete on public.seeding_checks for delete using (is_admin() or is_any_lead());
+
+-- Danh sách tên đã quét từ Facebook (lưu lại để đối chiếu lại khi tên/link Facebook của thành viên thay đổi)
+create table if not exists public.seeding_scans (
+  id uuid primary key default gen_random_uuid(),
+  campaign_id uuid not null references public.seeding_campaigns(id) on delete cascade,
+  action text not null check (action in ('like', 'comment', 'share')),
+  names jsonb not null default '[]',   -- [{ "name": "...", "url": "..." }]
+  post_url text not null default '',
+  created_by uuid references public.members(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists seeding_scans_campaign_idx on public.seeding_scans(campaign_id, action, created_at desc);
+alter table public.seeding_scans enable row level security;
+drop policy if exists read_all on public.seeding_scans;
+drop policy if exists lead_write on public.seeding_scans;
+create policy read_all on public.seeding_scans for select using (is_member());
+create policy lead_write on public.seeding_scans for all using (is_admin() or is_any_lead()) with check (is_admin() or is_any_lead());
