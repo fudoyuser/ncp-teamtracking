@@ -29,6 +29,7 @@
         window.fbHelper(site, {
           campaignId: cid,
           onDone: function (data) {
+            if (!chrome.runtime || !chrome.runtime.id) throw new Error('extension vừa được tải lại');
             chrome.runtime.sendMessage({
               type: 'scan-done',
               data: data,

@@ -966,6 +966,7 @@
       <div class="m-body">
         <div class="kpis small-kpis">${acts.map((a) => `<div class="kpi ok"><div class="kpi-val">${cnt(a)}/${ms.length}</div><div class="kpi-label">${ACTIONS[a]} – có tên (${p.lists[a].length} người trong danh sách)</div></div>`).join('')}</div>
         ${skipped.length ? `<p class="alert small">Chưa đối chiếu được: ${skipped.map((a) => `<b>${ACTIONS[a]}</b>${p.missing && p.missing[a] ? ' – ' + esc(p.missing[a]) : ''}`).join('; ')}. Có thể mở khung đó trên Facebook rồi bấm nút 📣 lần nữa, hoặc dùng "📋 Đối chiếu" trong Chi tiết đợt.</p>` : ''}
+        ${p.diag && p.lists && p.lists.like && !p.lists.like.length ? `<details class="small"><summary>🔍 Cảm xúc ra 0 tên – thông tin chẩn đoán (chụp gửi người sửa lỗi)</summary><pre style="white-space:pre-wrap;font-size:12px">${esc(JSON.stringify(p.diag, null, 1))}</pre></details>` : ''}
         <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${scanActs(c).map((a) => `<th>${ACTIONS[a]}</th>`).join('')}</tr></thead><tbody>
           ${ms.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}</td>${scanActs(c).map((a) => `<td>${res[a] ? (res[a].get(m.id) ? '<span class="badge ok">🟢 Có tên</span>' : '<span class="badge danger">🔴 Chưa thấy</span>') : '<span class="muted small">—</span>'}</td>`).join('')}</tr>`).join('')}
         </tbody></table></div>

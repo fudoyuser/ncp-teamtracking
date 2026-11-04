@@ -22,7 +22,7 @@ window.fbHelper = function fbHelper(site, opts) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v9</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v10</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -173,6 +173,8 @@ window.fbHelper = function fbHelper(site, opts) {
     try {
       var u = new URL(h, location.origin);
       if (/profile\.php/.test(u.pathname)) return u.origin + u.pathname + '?id=' + (u.searchParams.get('id') || '');
+      var gu = u.pathname.match(/\/groups\/[^/]+\/user\/(\d+)/);
+      if (gu) return u.origin + '/profile.php?id=' + gu[1];
       return u.origin + u.pathname.replace(/\/$/, '');
     } catch (e) { return ''; }
   };
@@ -181,6 +183,8 @@ window.fbHelper = function fbHelper(site, opts) {
   var goodLink = function (a) {
     var t = textOf(a);
     if (!t || t.length < 2 || t.length > 60 || JUNK.test(t)) return false;
+    var h = a.getAttribute('href') || '';
+    if (/\/groups\/[^/]+\/user\/\d+/.test(h)) return true;
     return !/\/(groups|pages|events|hashtag|photo|photos|watch|reel|stories|posts|videos)\b|comment_id=|\/ufi\//.test(a.getAttribute('href') || '');
   };
   // Người bình luận: chỉ lấy các khối bình luận (aria-label "Bình luận của …"), không lấy tác giả bài viết
@@ -197,56 +201,72 @@ window.fbHelper = function fbHelper(site, opts) {
     return out;
   };
   // Người trong khung danh sách (cảm xúc / chia sẻ)
+  var ROWJUNK = /^(\d+\s*(bạn chung|mutual)|.*(có thể xem tổng số|can see the total)|haha|wow|buồn|phẫn nộ|yêu thích|thương thương|love|care|sad|angry|người theo dõi|followers?)\b/i;
+  var addName = function (out, t, u) {
+    t = String(t || '').trim();
+    if (!t || t.length < 2 || t.length > 60 || JUNK.test(t) || ROWJUNK.test(t)) return;
+    if (!(t in out) || !out[t]) out[t] = u || '';
+  };
   var collectList = function (el) {
     var out = {};
-    // Tìm scroller bên trong (nếu có) để giới hạn phạm vi thu thập
     var scope = findScroller(el) || el;
-    // 1) Cách chính: a[href] có tên hợp lệ — chỉ tìm trong phần cuộn
+    // 1) Tên nằm trong link trang cá nhân
     scope.querySelectorAll('a[href]').forEach(function (a) {
-      if (!goodLink(a)) return;
-      var t = textOf(a);
-      if (!(t in out) || !out[t]) out[t] = cleanUrl(a.getAttribute('href'));
+      if (goodLink(a)) addName(out, textOf(a), cleanUrl(a.getAttribute('href')));
     });
-    // 2) Fallback: tìm a[href] trỏ đến trang cá nhân, lấy tên từ text bên trong link đó
-    if (Object.keys(out).length === 0) {
-      scope.querySelectorAll('a[href]').forEach(function (a) {
-        var href = a.getAttribute('href') || '';
-        // Chỉ lấy link profile (không phải link bài viết, group, page...)
-        if (/\/(groups|pages|events|hashtag|photo|photos|watch|reel|stories|posts|videos|share)\b/.test(href)) return;
-        if (!/^\/?[a-zA-Z0-9.]+\/?$/.test(href.replace(/^https?:\/\/[^/]+/, '').split('?')[0]) &&
-            !/profile\.php/.test(href)) return;
-        // Lấy tên = text đầu tiên trong link hoặc span con trực tiếp
-        var t = textOf(a);
-        if (t && t.length >= 2 && t.length <= 60 && !JUNK.test(t) && !/^\d/.test(t)) {
-          if (!(t in out) || !out[t]) out[t] = cleanUrl(href);
-        }
-      });
-    }
+    // 2) Mỗi hàng có ảnh đại diện → tên là dòng chữ hợp lệ đầu tiên của hàng (khi tên không nằm trong link)
+    scope.querySelectorAll('img, image').forEach(function (im) {
+      if (im.closest('[role="tablist"],[role="tab"]')) return;
+      var row = im.parentElement;
+      for (var up = 0; up < 10 && row && row !== scope.parentElement; up++, row = row.parentElement) {
+        var lines = String(row.innerText || '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+        if (!lines.length) continue;
+        var nm = lines.filter(function (l) { return l.length >= 2 && l.length <= 60 && !JUNK.test(l) && !ROWJUNK.test(l); })[0];
+        var a = row.querySelector('a[href]');
+        if (nm) addName(out, nm, a ? cleanUrl(a.getAttribute('href')) : '');
+        break;
+      }
+    });
     return out;
   };
   var toArr = function (o) { return Object.keys(o).map(function (k) { return { name: k, url: o[k] }; }); };
 
+  var diag = {};
   var scrollList = async function (d, label) {
-    var stable = 0, last = -1, noScroller = 0, cachedSc = null;
-    // Đợi nội dung dialog load (Facebook lazy-load danh sách cảm xúc)
+    var acc = {}, stable = 0, last = -1, noScroller = 0, zero = 0, cachedSc = null, i = 0;
+    // Facebook xóa các hàng đã cuộn qua → cộng dồn tên sau mỗi lần cuộn
+    var merge = function () {
+      var o = collectList(d);
+      Object.keys(o).forEach(function (k) { if (!(k in acc) || !acc[k]) acc[k] = o[k]; });
+      return Object.keys(acc).length;
+    };
     await sleep(2000);
-    for (var i = 0; i < 400 && !stop; i++) {
-      // Tìm scroller — khi đã tìm thấy, dùng lại nếu vẫn còn trong DOM
+    merge();
+    for (i = 0; i < 400 && !stop; i++) {
       var sc = (cachedSc && document.contains(cachedSc)) ? cachedSc : findScroller(d);
-      if (sc) {
-        cachedSc = sc;
-        sc.scrollTop = sc.scrollHeight;
-        noScroller = 0;
-      } else {
-        noScroller++;
-        if (noScroller >= 8) break;
-      }
-      await sleep(1100 + Math.random() * 900);
-      var n = Object.keys(collectList(d)).length;
-      msg(label + ': đang tự cuộn… ' + n + ' tên' + (sc ? '' : ' (đợi scroller…)'));
-      if (n === last) { if (++stable >= 4 && n > 0) break; } else { stable = 0; last = n; }
+      // Cuộn từng đoạn (không nhảy thẳng xuống đáy) để Facebook vẽ đủ mọi hàng ở giữa
+      if (sc) { cachedSc = sc; sc.scrollTop = Math.min(sc.scrollTop + Math.max(200, sc.clientHeight * 0.7), sc.scrollHeight); noScroller = 0; }
+      else if (++noScroller >= 8) break;
+      await sleep(900 + Math.random() * 700);
+      var n = merge();
+      var atEnd = !sc || sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 5;
+      msg(label + ': đang tự cuộn… ' + n + ' tên' + (sc ? '' : ' (chưa thấy thanh cuộn)'));
+      if (n === 0) { if (++zero >= 8) break; } else zero = 0;
+      if (n === last && atEnd) { if (++stable >= 4 && n > 0) break; } else { stable = 0; last = n; }
     }
-    return collectList(d);
+    merge();
+    diag.list = {
+      head: headOf(d).trim().slice(0, 60),
+      tabs: d.querySelectorAll('[role="tab"]').length,
+      scroller: !!cachedSc,
+      rounds: i,
+      links: d.querySelectorAll('a[href]').length,
+      imgs: d.querySelectorAll('img,image').length,
+      hrefs: Array.prototype.slice.call(d.querySelectorAll('a[href]'), 0, 5).map(function (a) { return (a.getAttribute('href') || '').split('?')[0].slice(0, 80) + ' «' + textOf(a).slice(0, 30) + '»'; }),
+      text: String(d.innerText || '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean).slice(0, 12).join(' | ').slice(0, 400),
+      names: Object.keys(acc).length
+    };
+    return acc;
   };
   var MORE = /^(xem thêm bình luận|xem thêm \d+ bình luận|xem các bình luận trước|xem \d+ phản hồi|xem tất cả \d+ phản hồi|view more comments|view \d+ more comments|view previous comments|view \d+ repl(y|ies)|view all \d+ replies)/i;
   var expandComments = async function (el) {
@@ -273,9 +293,11 @@ window.fbHelper = function fbHelper(site, opts) {
     var data = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
     if (opts.onDone) {
       msg(summary + ' – đang gửi về PCCV…');
-      try { opts.onDone(data); } catch(e) {}
-      setTimeout(function() { box.remove(); window.__pccvRunning = false; }, 2000);
-      return;
+      try {
+        opts.onDone(data);
+        setTimeout(function () { box.remove(); window.__pccvRunning = false; }, 2000);
+        return;
+      } catch (e) { summary += ' ⚠️ Không tự gửi được (' + e.message + ') – bấm nút dưới.'; }
     }
     msg(summary);
     var btn = box.querySelector('[data-stop]');
@@ -297,9 +319,13 @@ window.fbHelper = function fbHelper(site, opts) {
   // Chờ NGƯỜI DÙNG bấm vào số lượt cảm xúc của đúng bài → trả về khung danh sách + chỗ đã bấm
   var waitReactClick = function () {
     return new Promise(function (resolve) {
-      var lastClick = null, skipped = false;
-      var before = visibleDialogs();
-      var onClick = function (e) { if (!box.contains(e.target)) lastClick = e.target; };
+      var lastClick = null, clickAt = 0, skipped = false, clicks = 0;
+      var snap = visibleDialogs();
+      var onClick = function (e) {
+        if (box.contains(e.target)) return;
+        lastClick = e.target; clickAt = Date.now(); clicks++;
+        snap = visibleDialogs(); // khung có sẵn TRƯỚC lần bấm này
+      };
       document.addEventListener('click', onClick, true);
       var sk = document.createElement('button');
       sk.textContent = 'Bài chưa có cảm xúc → bỏ qua';
@@ -308,8 +334,18 @@ window.fbHelper = function fbHelper(site, opts) {
       box.appendChild(sk);
       var iv = setInterval(function () {
         if (stop || skipped) return done(null);
-        var d = visibleDialogs().filter(function (x) { return before.indexOf(x) < 0 && isReactDialog(x); })[0];
-        if (d) done({ dialog: d, target: lastClick });
+        if (!clickAt) return;
+        var fresh = visibleDialogs().filter(function (x) { return snap.indexOf(x) < 0 && !x.contains(box); });
+        var d = fresh.filter(isReactDialog)[0], how = 'tiêu đề/tab';
+        // Khung mới không phải bài viết (không chứa bình luận/bài) hiện ra ngay sau lần bấm
+        if (!d && Date.now() - clickAt < 15000) { d = fresh.filter(function (x) { return !x.querySelector('[role="article"]'); })[0]; how = 'khung mới sau lần bấm'; }
+        // Không có role="dialog": tìm tab "Tất cả" đang hiện → leo lên khối có thanh cuộn
+        if (!d) {
+          var tb = Array.prototype.filter.call(document.querySelectorAll('[role="tab"]'), function (t) { return t.getClientRects().length && /^(tất cả|all)(\s|$|\d)/i.test(textOf(t)); })[0];
+          for (var up = tb && tb.parentElement, lv = 0; up && lv < 10; up = up.parentElement, lv++) if (findScroller(up)) { d = up; how = 'tab Tất cả'; break; }
+        }
+        if (d) { diag.detect = how + ' · số lần bấm: ' + clicks; return done({ dialog: d, target: lastClick }); }
+        if (Date.now() - clickAt > 6000) msg('⚠️ Chưa nhận ra khung cảm xúc. Hãy bấm đúng vào CON SỐ cảm xúc (👍❤️ 28) dưới bài – không phải nút Thích.');
       }, 400);
       function done(r) { clearInterval(iv); document.removeEventListener('click', onClick, true); sk.remove(); resolve(r); }
     });
@@ -330,6 +366,7 @@ window.fbHelper = function fbHelper(site, opts) {
     var target = got && got.target;
     if (got) {
       var d = got.dialog;
+      msg('✓ Đã thấy khung cảm xúc – đang lấy tên…');
       await sleep(1500);
       var all = Array.prototype.filter.call(d.querySelectorAll('[role="tab"]'), function (tb) { return /^(tất cả|all)(\s|$|\d)/i.test(textOf(tb)); })[0];
       if (all && all.getAttribute('aria-selected') !== 'true') { all.click(); await sleep(2000); }
@@ -345,6 +382,6 @@ window.fbHelper = function fbHelper(site, opts) {
     var root = (pd && !isReactDialog(pd)) ? pd : (document.querySelector('[role="main"]') || document);
     if (!stop) lists.comment = toArr(await expandComments(root));
     var sum = ['like', 'comment'].map(function (k) { return LBL[k] + ': ' + (lists[k] ? lists[k].length : '✗'); }).join(' · ');
-    finish({ kind: 'all', post: post, lists: lists, missing: missing, names: [] }, 'Xong! ' + sum);
+    finish({ kind: 'all', post: post, lists: lists, missing: missing, names: [], diag: diag }, 'Xong! ' + sum);
   })();
 };
