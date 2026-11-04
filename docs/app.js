@@ -152,7 +152,7 @@
 
   /* ============================== khung trang ============================== */
   function viewList() {
-    const v = [{ id: 'mine', label: '🙋 Việc của tôi' }];
+    const v = [{ id: 'mine', label: '🙋 Việc của tôi' }, { id: 'seeding', label: '📣 Seeding' }];
     [...D().bans].sort((a, b) => a.sort - b.sort).forEach((b) => v.push({ id: 'ban:' + b.id, label: b.name }));
     if (me().isAdmin) { v.push({ id: 'dash', label: '📊 Dashboard' }); v.push({ id: 'admin', label: '⚙️ Quản trị' }); }
     return v;
@@ -182,6 +182,7 @@
     const v = state.view;
     const main = $('#main');
     if (v === 'mine') main.innerHTML = viewMine();
+    else if (v === 'seeding') main.innerHTML = viewSeeding();
     else if (v.startsWith('ban:')) { main.innerHTML = viewBanShell(v.slice(4)); renderBanBody(); }
     else if (v === 'dash') main.innerHTML = viewDash();
     else if (v === 'admin') main.innerHTML = viewAdmin();
@@ -463,6 +464,172 @@
     });
   }
 
+  /* ============================== Seeding ============================== */
+  const ACTIONS = { like: '👍 Like', comment: '💬 Comment', share: '🔁 Share' };
+  const checkOf = (cid, mid, action) => D().checks.find((x) => x.campaignId === cid && x.memberId === mid && x.action === action);
+  const actionDone = (cid, mid, action) => { const c = checkOf(cid, mid, action); return !!c && (c.verified === 'found' || (c.selfDone && c.verified !== 'not_found')); };
+  const memberDone = (c, mid) => c.actions.every((a) => actionDone(c.id, mid, a));
+  const canSeed = () => me().isAdmin || me().bans.some((b) => b.isLead);
+  const fbLink = (m) => (m && m.fbUrl ? ` <a href="${esc(m.fbUrl)}" target="_blank" rel="noopener" title="Trang Facebook" class="fb-link">ⓕ</a>` : '');
+
+  function viewSeeding() {
+    const list = D().campaigns || [];
+    const mine = list.filter((c) => c.memberIds.includes(me().id));
+    const myOpen = mine.filter((c) => !memberDone(c, me().id));
+    const myCard = (c) => `<div class="card seed-card">
+      <div class="row-between"><div><div class="tc-title">${esc(c.title)}</div>
+        <div class="tc-meta">${c.deadline ? deadlineBadge(c.deadline, memberDone(c, me().id)) : ''} ${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết ↗</a>` : ''}</div></div></div>
+      <div class="seed-actions">${c.actions.map((a) => {
+        const ch = checkOf(c.id, me().id, a) || {};
+        const v = ch.verified === 'found' ? '<span class="badge ok">🟢 Đã thấy tên bạn</span>' : ch.verified === 'not_found' ? '<span class="badge danger">🔴 Chưa thấy tên bạn</span>' : '';
+        return `<div class="seed-act"><label class="check"><input type="checkbox" data-change="seed-self" data-cid="${esc(c.id)}" data-action="${a}" ${ch.selfDone ? 'checked' : ''}> ${ACTIONS[a]}</label> ${v}
+</div>`;
+      }).join('')}</div></div>`;
+    const allCard = (c) => {
+      const done = c.memberIds.filter((mid) => memberDone(c, mid)).length;
+      return `<div class="card seed-row"><div class="seed-row-main"><b>${esc(c.title)}</b>
+        <div class="muted small">${c.actions.map((a) => ACTIONS[a]).join(' · ')}${c.deadline ? ' · hạn ' + fmtDate(c.deadline, true) : ''} · ${c.memberIds.length} người</div></div>
+        <div class="bar ok seed-progress" data-tip="${done}/${c.memberIds.length} người đã hoàn thành"><div style="width:${pct(done, c.memberIds.length) || 0}%"></div><span>${done}/${c.memberIds.length}</span></div>
+        <button class="btn small" data-act="seed-detail" data-id="${esc(c.id)}">Chi tiết</button></div>`;
+    };
+    return `<div class="page-head row"><div><h2>Seeding</h2><p class="muted">Like, comment, share bài fanpage. Tick khi bạn đã làm xong; trưởng ban đối chiếu với danh sách trên Facebook (share phải để chế độ <b>Công khai</b> mới hiện tên).</p></div>
+        <div class="actions"><button class="btn" data-act="my-fb">ⓕ Facebook của tôi${me().fbName || me().fbUrl ? '' : ' (chưa điền)'}</button>
+        ${canSeed() ? '<button class="btn primary" data-act="seed-new">＋ Tạo đợt seeding</button>' : ''}</div></div>
+      ${!me().fbName && !me().fbUrl && mine.length ? '<div class="banner"><div><b>ⓕ Điền tên Facebook của bạn</b><br><span class="small">Nếu tên Facebook khác tên thật (vd. "Dương Phan", biệt danh…), hãy điền để hệ thống nhận ra bạn khi đối chiếu.</span></div><button class="btn primary small" data-act="my-fb">Điền ngay</button></div>' : ''}
+      <section class="group"><h3>🙋 Việc seeding của tôi <span class="count">${myOpen.length} chưa xong</span></h3>
+        ${mine.length ? mine.map(myCard).join('') : '<div class="empty">Bạn chưa có đợt seeding nào.</div>'}</section>
+      <section class="group"><h3>📋 Tất cả đợt seeding <span class="count">${list.length}</span></h3>
+        ${list.length ? list.map(allCard).join('') : '<div class="empty">Chưa có đợt seeding nào.</div>'}</section>`;
+  }
+
+  function openSeedDetail(c) {
+    const lead = canSeed();
+    const rows = c.memberIds.map(memberById).filter(Boolean).sort((a, b) => Number(memberDone(c, a.id)) - Number(memberDone(c, b.id)) || a.name.localeCompare(b.name, 'vi'));
+    const cell = (m, a) => {
+      const ch = checkOf(c.id, m.id, a) || {};
+      let s = ch.verified === 'found' ? '<span class="badge ok">🟢 Có tên</span>' : ch.verified === 'not_found' ? '<span class="badge danger">🔴 Chưa thấy</span>' : '';
+      if (ch.selfDone) s += ' <span class="badge" title="Thành viên tự xác nhận">✅ Tự báo</span>';
+      if (a === 'share' && ch.proofUrl) s += ` <a class="link" href="${esc(ch.proofUrl)}" target="_blank" rel="noopener">🔗 bằng chứng</a>`;
+      return s || '<span class="muted small">—</span>';
+    };
+    const done = rows.filter((m) => memberDone(c, m.id)).length;
+    openModal(`<div class="wide">${modalHead(esc(c.title), `${done}/${rows.length} người hoàn thành`)}
+      <div class="m-body">
+        <p class="small">${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết trên Facebook ↗</a> · ` : ''}${c.deadline ? 'Hạn ' + fmtDate(c.deadline, true) : 'Không có hạn'}</p>
+        ${lead ? `<div class="hint"><b>Đối chiếu:</b> mở bài trên Facebook → bấm vào số lượt cảm xúc / bình luận / chia sẻ → bôi đen cả danh sách tên → copy → bấm nút bên dưới và dán vào.
+          <div class="seed-verify-btns">${c.actions.map((a) => `<button class="btn small" data-act="seed-verify" data-id="${esc(c.id)}" data-action="${a}">📋 Đối chiếu ${ACTIONS[a]}</button>`).join('')}</div></div>` : ''}
+        <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th>${c.actions.map((a) => `<th>${ACTIONS[a]}</th>`).join('')}<th></th></tr></thead><tbody>
+          ${rows.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}${m.fbName ? `<div class="muted small">FB: ${esc(m.fbName)}</div>` : ''}</td>
+            ${c.actions.map((a) => `<td>${cell(m, a)}</td>`).join('')}<td>${memberDone(c, m.id) ? '✔' : ''}</td></tr>`).join('')}
+        </tbody></table></div>
+        <p class="muted small">"Hoàn thành" = có tên khi đối chiếu, hoặc tự báo đã làm mà chưa bị đối chiếu là "Chưa thấy".</p>
+      </div>
+      <footer class="m-foot">${lead ? `<div><button type="button" class="btn danger-ghost" data-act="seed-delete" data-id="${esc(c.id)}">Xóa đợt</button>
+        <button type="button" class="btn ghost" data-act="seed-edit" data-id="${esc(c.id)}">Sửa</button></div>` : '<span></span>'}
+        <button class="btn primary" data-act="close">Đóng</button></footer></div>`);
+  }
+
+  function openSeedForm(c) {
+    const creating = !c;
+    c = c || { title: '', postUrl: '', actions: ['like', 'comment', 'share'], deadline: '', memberIds: [] };
+    const groups = D().bans.map((b) => ({ b, ms: activeMembers().filter((m) => m.bans.some((x) => x.banId === b.id)) }));
+    const noBan = activeMembers().filter((m) => !m.bans.length);
+    const box = (m) => `<label class="check small"><input type="checkbox" name="mem" value="${esc(m.id)}" ${c.memberIds.includes(m.id) ? 'checked' : ''}> ${esc(m.name)}</label>`;
+    openModal(`<form id="seed-form">${modalHead(creating ? 'Tạo đợt seeding' : 'Sửa đợt seeding')}
+      <div class="m-body">
+        <label>Tên đợt *<input name="title" required value="${esc(c.title)}" placeholder="VD: Seeding bài mở đơn – Chuyện nghề Quản lý cửa hàng"></label>
+        <label>Link bài viết trên fanpage<input name="postUrl" value="${esc(c.postUrl)}" placeholder="https://www.facebook.com/…"></label>
+        <div class="field"><span class="lbl">Cần làm</span><div class="row-wrap">${Object.keys(ACTIONS).map((a) => `<label class="check"><input type="checkbox" name="act" value="${a}" ${c.actions.includes(a) ? 'checked' : ''}> ${ACTIONS[a]}</label>`).join('')}</div></div>
+        <label>Hạn chót<input name="deadline" type="date" value="${esc(c.deadline)}"></label>
+        <div class="field"><span class="lbl">Ai tham gia</span>
+          <div class="row-wrap"><button type="button" class="btn ghost small" data-act="seed-all">Chọn tất cả</button><button type="button" class="btn ghost small" data-act="seed-none">Bỏ chọn</button></div>
+          ${groups.map((g) => `<div class="mem-group"><div class="row-between"><b class="small">${esc(g.b.name)}</b><button type="button" class="btn ghost small" data-act="seed-ban" data-ban="${esc(g.b.id)}">Chọn cả Ban</button></div>
+            <div class="mem-grid" data-ban-group="${esc(g.b.id)}">${g.ms.map(box).join('')}</div></div>`).join('')}
+          ${noBan.length ? `<div class="mem-group"><b class="small">Chưa thuộc Ban</b><div class="mem-grid">${noBan.map(box).join('')}</div></div>` : ''}
+        </div>
+      </div>
+      <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="seed-btn">${creating ? 'Tạo' : 'Lưu'}</button></div></footer></form>`);
+    $('#seed-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const f = ev.target, fd = new FormData(f);
+      const actions = fd.getAll('act');
+      const memberIds = [...new Set(fd.getAll('mem'))];
+      if (!actions.length) return toast('Chọn ít nhất 1 việc cần làm.', 'error');
+      if (!memberIds.length) return toast('Chọn ít nhất 1 người tham gia.', 'error');
+      const url = String(fd.get('postUrl') || '').trim();
+      if (url && !/^https?:\/\//i.test(url)) return toast('Link bài viết phải bắt đầu bằng https://', 'error');
+      await run(async () => {
+        const saved = await S.saveCampaign({ id: c.id, title: String(fd.get('title')).trim(), postUrl: url, actions, deadline: fd.get('deadline'), memberIds, createdBy: me().id });
+        const i = D().campaigns.findIndex((x) => x.id === saved.id);
+        if (i >= 0) D().campaigns[i] = saved; else D().campaigns.unshift(saved);
+        closeModal(); toast(creating ? 'Đã tạo đợt seeding.' : 'Đã lưu.'); renderMain();
+      }, $('#seed-btn'));
+    });
+  }
+
+  /** So danh sách tên copy từ Facebook với người tham gia (không phân biệt dấu; ưu tiên "tên Facebook" nếu có). */
+  function matchNames(text, members) {
+    const lines = String(text).split(/[\n\r]+/).map((l) => nkey(l.replace(/[^\p{L}\p{N}\s]/gu, ' '))).filter(Boolean);
+    const blob = ' ' + lines.join(' | ') + ' ';
+    return members.map((m) => {
+      const cands = [m.fbName, m.name].filter(Boolean).map(nkey);
+      return { m, found: cands.some((k) => lines.includes(k) || blob.includes(' ' + k + ' ')) };
+    });
+  }
+
+  function openSeedVerify(c, action) {
+    const ms = c.memberIds.map(memberById).filter(Boolean);
+    openModal(`<form id="verify-form">${modalHead('Đối chiếu ' + ACTIONS[action], c.title)}
+      <div class="m-body">
+        <ol class="small"><li>Mở <a href="${esc(c.postUrl || '#')}" target="_blank" rel="noopener">bài viết</a> trên Facebook.</li>
+          <li>Bấm vào <b>${action === 'like' ? 'số lượt cảm xúc' : action === 'comment' ? '"Xem thêm bình luận" cho đến hết' : 'số lượt chia sẻ'}</b>, cuộn xuống hết danh sách.</li>
+          <li>Bôi đen toàn bộ danh sách (hoặc Ctrl+A trong khung đó) → Ctrl+C → dán vào ô dưới.</li></ol>
+        <textarea name="text" rows="8" placeholder="Dán danh sách tên vào đây…" required></textarea>
+        <div id="verify-preview"></div>
+      </div>
+      <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="verify-btn">Lưu kết quả</button></div></footer></form>`);
+    const f = $('#verify-form');
+    const preview = () => {
+      const res = matchNames(f.text.value, ms);
+      const found = res.filter((r) => r.found);
+      $('#verify-preview').innerHTML = f.text.value.trim() ? `<p class="small"><b>🟢 Có tên: ${found.length}</b> · <b>🔴 Chưa thấy: ${res.length - found.length}</b></p>
+        <div class="row-wrap">${res.map((r) => `<span class="chip ${r.found ? 'me' : 'unknown'}">${r.found ? '🟢' : '🔴'} ${esc(r.m.name)}</span>`).join('')}</div>` : '';
+      return res;
+    };
+    f.text.addEventListener('input', preview);
+    f.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const res = preview();
+      await run(async () => {
+        const saved = await S.verifyChecks(c.id, action, res.map((r) => ({ memberId: r.m.id, verified: r.found ? 'found' : 'not_found' })));
+        saved.forEach((x) => {
+          const i = D().checks.findIndex((y) => y.campaignId === x.campaignId && y.memberId === x.memberId && y.action === x.action);
+          if (i >= 0) D().checks[i] = x; else D().checks.push(x);
+        });
+        toast(`Đã đối chiếu: ${res.filter((r) => r.found).length}/${res.length} có tên.`);
+        renderMain(); openSeedDetail(c);
+      }, $('#verify-btn'));
+    });
+  }
+
+  function openMyFb() {
+    const m = me();
+    openModal(`<form id="fb-form">${modalHead('ⓕ Facebook của tôi')}
+      <div class="m-body">
+        <label>Tên hiển thị trên Facebook<input name="fbName" value="${esc(m.fbName)}" placeholder="${esc(m.name)}"></label>
+        <p class="muted small">Chỉ cần điền nếu tên Facebook khác tên thật (vd. "Dương Phan", "Linh Chi Nguyễn", biệt danh). Hệ thống dùng tên này để đối chiếu seeding.</p>
+        <label>Link trang Facebook cá nhân<input name="fbUrl" value="${esc(m.fbUrl)}" placeholder="https://www.facebook.com/ten-cua-ban"></label>
+      </div>
+      <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="fb-btn">Lưu</button></div></footer></form>`);
+    $('#fb-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const f = ev.target;
+      const url = f.fbUrl.value.trim();
+      if (url && !/^https?:\/\/(www\.|m\.|web\.)?(facebook\.com|fb\.com)\//i.test(url)) return toast('Link phải là trang Facebook (https://www.facebook.com/…)', 'error');
+      await run(async () => { await S.setMyFacebook(f.fbName.value, url); Object.assign(me(), { fbName: f.fbName.value.trim(), fbUrl: url }); closeModal(); toast('Đã lưu.'); renderMain(); }, $('#fb-btn'));
+    });
+  }
+
   /* ============================== Dashboard ============================== */
   function viewDash() {
     const f = state.dash;
@@ -646,7 +813,7 @@
       <div class="filters"><input type="search" data-acct-q placeholder="Tìm theo tên hoặc email…" value="${esc(state.acctQ)}" aria-label="Tìm tài khoản"></div>
       <div class="table-wrap"><table class="tasks"><thead><tr><th>Thành viên</th><th>Ban</th><th>Quyền</th><th>Chống spam</th><th>Trạng thái</th><th></th></tr></thead><tbody>
       ${list.map((m) => { const c = CONFIRM[confirmOf(m.id)]; return `<tr class="${m.active ? '' : 'done'}">
-        <td><b>${esc(m.name)}</b><div class="muted small">${esc(m.email)}</div></td>
+        <td><b>${esc(m.name)}</b>${fbLink(m)}<div class="muted small">${esc(m.email)}</div></td>
         <td>${m.bans.map((x) => { const b = banById(x.banId); return b ? `<span class="chip ${x.isLead ? 'me' : ''}">${x.isLead ? '★ ' : ''}${esc(b.name)}</span>` : ''; }).join('') || '<span class="muted small">—</span>'}</td>
         <td>${m.isAdmin ? '<span class="badge ok">Admin</span>' : m.bans.some((x) => x.isLead) ? '<span class="badge">Trưởng ban</span>' : '<span class="muted small">Thành viên</span>'}</td>
         <td>${m.userId ? `<span class="badge ${c[2]}">${c[0]} ${c[1]}</span>` : '<span class="muted small">—</span>'}</td>
@@ -702,6 +869,8 @@
     openModal(`<form id="mem-form">${modalHead('Sửa thành viên', m.email)}
       <div class="m-body">
         <label>Họ tên *<input name="name" required value="${esc(m.name)}"></label>
+        <label>Tên trên Facebook <span class="muted small">(nếu khác tên thật)</span><input name="fbName" value="${esc(m.fbName || '')}"></label>
+        <label>Link Facebook cá nhân<input name="fbUrl" value="${esc(m.fbUrl || '')}" placeholder="https://www.facebook.com/…"></label>
         <div class="field"><span class="lbl">Ban</span>${banPicker(m.bans)}</div>
         <label class="check"><input type="checkbox" name="isAdmin" ${m.isAdmin ? 'checked' : ''} ${m.id === me().id ? 'disabled' : ''}> Quyền <b>Admin</b>${m.id === me().id ? ' <span class="muted small">(không tự bỏ quyền của chính mình)</span>' : ''}</label>
         <p class="muted small">Muốn đổi email: khóa tài khoản này và cấp tài khoản mới.</p>
@@ -711,7 +880,7 @@
       ev.preventDefault();
       const fd = new FormData(ev.target);
       await run(async () => {
-        await S.updateMember({ id: m.id, name: String(fd.get('name')).trim(), isAdmin: m.id === me().id ? true : !!fd.get('isAdmin'), bans: readBans(fd) });
+        await S.updateMember({ id: m.id, name: String(fd.get('name')).trim(), isAdmin: m.id === me().id ? true : !!fd.get('isAdmin'), bans: readBans(fd), fbName: String(fd.get('fbName') || '').trim(), fbUrl: String(fd.get('fbUrl') || '').trim() });
         closeModal(); toast('Đã lưu.'); await refreshQuiet(); renderMain();
       }, $('#mem-btn'));
     });
@@ -895,6 +1064,12 @@
   });
 
   /* ============================== sự kiện ============================== */
+  async function saveMyCheck(cid, action, selfDone, proofUrl) {
+    const x = await S.saveCheck({ campaignId: cid, memberId: me().id, action, selfDone, proofUrl });
+    const i = D().checks.findIndex((y) => y.campaignId === cid && y.memberId === me().id && y.action === action);
+    if (i >= 0) D().checks[i] = x; else D().checks.push(x);
+    renderMain();
+  }
   const findTask = (id) => D().tasks.find((t) => t.id === id);
   const actions = {
     view: (el) => { state.view = el.dataset.view; ss.set('view', state.view); render(); window.scrollTo(0, 0); },
@@ -958,6 +1133,27 @@
         ${ok.length ? `<button class="btn small" data-act="copy-pw" data-text="${esc(all)}">📋 Sao chép toàn bộ danh sách</button>` : ''}</div>
         <footer class="m-foot"><span></span><button class="btn primary" data-act="close">Xong</button></footer></div>`);
     },
+    'my-fb': () => openMyFb(),
+    'seed-new': () => openSeedForm(null),
+    'seed-detail': (el) => openSeedDetail(D().campaigns.find((c) => c.id === el.dataset.id)),
+    'seed-edit': (el) => openSeedForm(D().campaigns.find((c) => c.id === el.dataset.id)),
+    'seed-verify': (el) => openSeedVerify(D().campaigns.find((c) => c.id === el.dataset.id), el.dataset.action),
+    'seed-all': () => $$('#seed-form input[name=mem]').forEach((x) => { x.checked = true; }),
+    'seed-none': () => $$('#seed-form input[name=mem]').forEach((x) => { x.checked = false; }),
+    'seed-ban': (el) => $$(`#seed-form [data-ban-group="${CSS.escape(el.dataset.ban)}"] input`).forEach((x) => { x.checked = true; }),
+    'seed-delete': async (el) => {
+      const c = D().campaigns.find((x) => x.id === el.dataset.id);
+      if (!confirm(`Xóa đợt seeding "${c.title}"?`)) return;
+      await run(async () => { await S.deleteCampaign(c.id); D().campaigns = D().campaigns.filter((x) => x.id !== c.id); closeModal(); toast('Đã xóa.'); renderMain(); }, el);
+    },
+    'seed-proof': async (el) => {
+      const cid = el.dataset.cid;
+      const input = $(`[data-proof="${CSS.escape(cid)}"]`);
+      const url = input.value.trim();
+      if (url && !/^https?:\/\//i.test(url)) return toast('Link phải bắt đầu bằng https://', 'error');
+      const cur = checkOf(cid, me().id, 'share') || {};
+      await run(async () => { await saveMyCheck(cid, 'share', url ? true : !!cur.selfDone, url); toast('Đã lưu link.'); }, el);
+    },
     'resume-mail': async (el) => {
       await run(async () => { await S.saveSettings({ mail_paused: false, mail_paused_until: '' }); await refreshQuiet(); renderMain(); toast('▶ Đã bật lại gửi mail tự động.'); }, el);
     },
@@ -1003,6 +1199,11 @@
         renderMain();
       });
       if (t.status === prev) { el.value = prev; el.disabled = false; }
+    } else if (el.dataset.change === 'seed-self') {
+      el.disabled = true;
+      const cur = checkOf(el.dataset.cid, me().id, el.dataset.action) || {};
+      await run(async () => { await saveMyCheck(el.dataset.cid, el.dataset.action, el.checked, cur.proofUrl || ''); });
+      el.disabled = false;
     } else if (el.dataset.change === 'chip-add') {
       const id = el.value;
       if (!id) return;

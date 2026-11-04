@@ -7,7 +7,7 @@
   /* ======================= chuyển đổi dòng DB ↔ đối tượng ======================= */
   const mapMember = (m, mbs) => ({
     id: m.id, userId: m.user_id, email: m.email, name: m.name, isAdmin: m.is_admin, active: m.active,
-    mustChange: m.must_change_password, createdAt: m.created_at,
+    mustChange: m.must_change_password, createdAt: m.created_at, fbName: m.fb_name || '', fbUrl: m.fb_url || '',
     bans: mbs.filter((x) => x.member_id === m.id).map((x) => ({ banId: x.ban_id, isLead: x.is_lead })),
   });
   const mapTask = (t, parts) => ({
@@ -15,6 +15,9 @@
     leadIds: t.lead_ids || [], links: Array.isArray(t.links) ? t.links : [], doneAt: t.done_at, createdAt: t.created_at,
     parts: parts.filter((p) => p.task_id === t.id).map((p) => ({ id: p.id, roleId: p.role_id, deadline: p.deadline || '', assigneeIds: p.assignee_ids || [] })),
   });
+  const mapCampaign = (c) => ({ id: c.id, title: c.title, postUrl: c.post_url || '', actions: c.actions || [], deadline: c.deadline || '',
+    memberIds: c.member_ids || [], banId: c.ban_id, createdBy: c.created_by, createdAt: c.created_at });
+  const mapCheck = (x) => ({ campaignId: x.campaign_id, memberId: x.member_id, action: x.action, selfDone: x.self_done, proofUrl: x.proof_url || '', verified: x.verified || '' });
   const mapConfirm = (c) => ({ sends: c.sends, lastSent: c.last_sent, clicked: !!c.clicked_at, replied: !!c.replied_at, filter: !!c.filter_at });
 
   /* ======================= SUPABASE ======================= */
@@ -79,9 +82,10 @@
         await q(sb.rpc('mark_password_changed'));
       },
       async loadAll() {
-        const [bans, roles, members, mbs, events, tasks, parts, settings, confirms] = await Promise.all([
+        const [bans, roles, members, mbs, events, tasks, parts, settings, confirms, campaigns, checks] = await Promise.all([
           all('bans', 'sort'), all('ban_roles', 'sort'), all('members', 'name'), all('member_bans'),
           all('events'), all('tasks', 'created_at'), all('task_parts'), all('settings'), all('email_confirm'),
+          all('seeding_campaigns', 'created_at'), all('seeding_checks'),
         ]);
         const meRow = members.find((m) => m.user_id === userId);
         if (!meRow || !meRow.active) throw err('Tài khoản của bạn chưa được cấp quyền hoặc đã bị khóa. Liên hệ admin.', 'NOT_MEMBER');
@@ -95,6 +99,7 @@
           events: events.map((e) => ({ id: e.id, name: e.name, date: e.event_date || '' })),
           tasks: tasks.map((t) => mapTask(t, parts)),
           settings: s, confirms: c, meId: meRow.id,
+          campaigns: campaigns.map(mapCampaign).reverse(), checks: checks.map(mapCheck),
         };
       },
       async saveTask(t, full) {
@@ -132,7 +137,7 @@
       },
       async deleteBan(id) { await q(sb.from('bans').delete().eq('id', id)); },
       async updateMember(m) {
-        await q(sb.from('members').update({ name: m.name, is_admin: m.isAdmin }).eq('id', m.id));
+        await q(sb.from('members').update({ name: m.name, is_admin: m.isAdmin, fb_name: m.fbName || '', fb_url: m.fbUrl || '' }).eq('id', m.id));
         await q(sb.from('member_bans').delete().eq('member_id', m.id));
         if (m.bans.length) await q(sb.from('member_bans').insert(m.bans.map((b) => ({ member_id: m.id, ban_id: b.banId, is_lead: b.isLead }))));
       },
@@ -142,6 +147,26 @@
       setActive: (id, active) => script('setActive', { memberId: id, active }),
       resendConfirm: (ids) => script('resendConfirm', { memberIds: ids || [] }),
       async markFilter() { await q(sb.rpc('mark_gmail_filter')); },
+      async setMyFacebook(name, url) { await q(sb.rpc('set_my_facebook', { p_name: name, p_url: url })); },
+      async saveCampaign(c) {
+        const row = { title: c.title, post_url: c.postUrl, actions: c.actions, deadline: c.deadline || null, member_ids: c.memberIds, ban_id: c.banId || null };
+        const r = c.id ? await q(sb.from('seeding_campaigns').update(row).eq('id', c.id).select().single())
+          : await q(sb.from('seeding_campaigns').insert(Object.assign(row, { created_by: c.createdBy })).select().single());
+        return mapCampaign(r);
+      },
+      async deleteCampaign(id) { await q(sb.from('seeding_campaigns').delete().eq('id', id)); },
+      async saveCheck(x) {
+        const r = await q(sb.from('seeding_checks').upsert({ campaign_id: x.campaignId, member_id: x.memberId, action: x.action, self_done: x.selfDone, proof_url: x.proofUrl || '' },
+          { onConflict: 'campaign_id,member_id,action' }).select().single());
+        return mapCheck(r);
+      },
+      async verifyChecks(campaignId, action, results) {
+        if (!results.length) return [];
+        const now = new Date().toISOString();
+        const rows = await q(sb.from('seeding_checks').upsert(results.map((r) => ({ campaign_id: campaignId, member_id: r.memberId, action, verified: r.verified, verified_at: now })),
+          { onConflict: 'campaign_id,member_id,action' }).select());
+        return rows.map(mapCheck);
+      },
       async saveSettings(s) {
         await q(sb.from('settings').upsert(Object.keys(s).map((k) => ({ key: k, value: s[k] }))));
       },
@@ -175,6 +200,7 @@
       tasks: [],
       settings: { reminder_days: 1, overdue_max_days: 7, sender_email: 'nhacviec.demo@gmail.com' },
       confirms: {},
+      campaigns: [], checks: [],
     };
     const add = (banId, eventId, name, status, parts, opts = {}) => {
       const t = { id: uid(), banId, eventId, name, status, note: opts.note || '', leadIds: opts.lead || [], links: opts.links || [],
@@ -211,6 +237,12 @@
       db.confirms[db.members[i].id] = { sends: 1, lastSent: daysAgo(4), clicked: st !== 'da_gui', replied: st === 'tin_cay', filter: false };
     });
 
+    db.members[2].fbName = 'Nam Lê'; db.members[5].fbUrl = 'https://facebook.com/';
+    db.campaigns.push({ id: 'sd-1', title: 'Seeding bài giới thiệu diễn giả – Chuyện nghề Marketing', postUrl: 'https://facebook.com/', actions: ['like', 'comment', 'share'],
+      deadline: iso(1), memberIds: db.members.map((m) => m.id), banId: 'ban-tt', createdBy: 'm-nam', createdAt: daysAgo(1) });
+    [['m-linh', 'like', true, '', 'found'], ['m-linh', 'share', true, 'https://facebook.com/share/abc', ''], ['m-bao', 'like', true, '', 'not_found'], ['m-mai', 'comment', true, '', 'found'],
+      ['m-huy', 'like', false, '', 'found'], ['m-an', 'like', true, '', ''], ['m-an', 'comment', true, '', ''], ['m-an', 'share', true, 'https://facebook.com/share/x', '']].forEach(([memberId, action, selfDone, proofUrl, verified]) =>
+      db.checks.push({ campaignId: 'sd-1', memberId, action, selfDone, proofUrl, verified }));
     let meId = null;
     const me = () => db.members.find((m) => m.id === meId);
     const wait = () => new Promise((r) => setTimeout(r, 120));
@@ -227,7 +259,7 @@
       async loadAll() {
         await wait();
         if (!me()) throw err('Hãy chọn người dùng demo.', 'NOT_MEMBER');
-        return clone({ bans: db.bans, members: db.members, events: db.events, tasks: db.tasks, settings: db.settings, confirms: db.confirms, meId });
+        return clone({ bans: db.bans, members: db.members, events: db.events, tasks: db.tasks, settings: db.settings, confirms: db.confirms, campaigns: db.campaigns, checks: db.checks, meId });
       },
       async saveTask(t, full) {
         await wait();
@@ -282,7 +314,32 @@
         db.bans = db.bans.filter((b) => b.id !== id);
         db.members.forEach((m) => { m.bans = m.bans.filter((x) => x.banId !== id); });
       },
-      async updateMember(m) { await wait(); needAdmin(); Object.assign(db.members.find((x) => x.id === m.id), { name: m.name, isAdmin: m.isAdmin, bans: m.bans }); },
+      async updateMember(m) { await wait(); needAdmin(); Object.assign(db.members.find((x) => x.id === m.id), { name: m.name, isAdmin: m.isAdmin, bans: m.bans, fbName: m.fbName || '', fbUrl: m.fbUrl || '' }); },
+      async setMyFacebook(name, url) { await wait(); Object.assign(me(), { fbName: name.trim(), fbUrl: url.trim() }); },
+      async saveCampaign(c) {
+        await wait();
+        let row = db.campaigns.find((x) => x.id === c.id);
+        if (!row) { row = { id: uid(), createdAt: new Date().toISOString(), createdBy: c.createdBy }; db.campaigns.unshift(row); }
+        Object.assign(row, { title: c.title, postUrl: c.postUrl, actions: c.actions, deadline: c.deadline || '', memberIds: c.memberIds, banId: c.banId || null });
+        return clone(row);
+      },
+      async deleteCampaign(id) { await wait(); db.campaigns = db.campaigns.filter((x) => x.id !== id); db.checks = db.checks.filter((x) => x.campaignId !== id); },
+      async saveCheck(x) {
+        await wait();
+        let row = db.checks.find((c) => c.campaignId === x.campaignId && c.memberId === x.memberId && c.action === x.action);
+        if (!row) { row = { campaignId: x.campaignId, memberId: x.memberId, action: x.action, verified: '' }; db.checks.push(row); }
+        Object.assign(row, { selfDone: x.selfDone, proofUrl: x.proofUrl || '' });
+        return clone(row);
+      },
+      async verifyChecks(campaignId, action, results) {
+        await wait();
+        return results.map((r) => {
+          let row = db.checks.find((c) => c.campaignId === campaignId && c.memberId === r.memberId && c.action === action);
+          if (!row) { row = { campaignId, memberId: r.memberId, action, selfDone: false, proofUrl: '' }; db.checks.push(row); }
+          row.verified = r.verified;
+          return clone(row);
+        });
+      },
       async createAccount(m) {
         await wait(); needAdmin();
         if (db.members.some((x) => x.email === m.email.toLowerCase())) throw err('Email này đã có tài khoản.');

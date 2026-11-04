@@ -242,3 +242,19 @@ dialog form, dialog > div { display: flex; flex-direction: column; max-height: c
 .pause-box { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; display: grid; gap: 10px; }
 .pause-box legend { font-weight: 600; padding: 0 4px; }
 .pause-box input[type=date] { max-width: 180px; }
+
+.seed-card { display: grid; gap: 10px; }
+.seed-actions { display: grid; gap: 8px; }
+.seed-act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.seed-act .proof { display: flex; gap: 6px; flex: 1 1 100%; }
+.seed-act .proof input { flex: 1; min-width: 0; }
+.seed-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px 16px; margin-bottom: 8px; }
+.seed-row-main { flex: 1 1 260px; min-width: 0; }
+.seed-progress { width: 160px; }
+.seed-verify-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.row-wrap { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.mem-group { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.mem-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px 12px; margin-top: 6px; }
+.fb-link { text-decoration: none; font-weight: 700; margin-left: 4px; }
+dialog:has(.wide) { width: min(900px, calc(100vw - 32px)); }
+#verify-form textarea { font-family: inherit; }
