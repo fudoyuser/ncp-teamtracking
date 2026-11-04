@@ -81,6 +81,7 @@ function route_(me, action, p) {
     case 'setActive': adminOnly(); return withLock_(() => setActive_(p.memberId, !!p.active));
     case 'resendConfirm': adminOnly(); return withLock_(() => ({ sent: resendConfirmNow_(p.memberIds) }));
     case 'ping': return { ok: true, sender: senderEmail_() };
+    case 'checkLink': return checkPartLink_(p.partId);
     default: throw fail_('BAD_ACTION', 'Hành động không hợp lệ: ' + action);
   }
 }
@@ -266,6 +267,7 @@ function runDaily() {
   checkProps_();
   safe_('Lưu địa chỉ gửi', () => setSetting_('sender_email', senderEmail_()));
   safe_('Kiểm tra email trả lời', checkReplies_);
+  safe_('Kiểm tra quyền link sản phẩm', recheckLinks_);
   if (mailPaused_()) { console.log('Admin đang TẠM HOÃN gửi mail tự động – bỏ qua nhắc việc hôm nay.'); return; }
   safe_('Gửi lại email xác nhận', processConfirmations_);
   safe_('Gửi nhắc việc', sendReminders_);
@@ -344,6 +346,7 @@ function sendReminders_() {
   d.parts.forEach(p => {
     const t = tasks[p.task_id];
     if (!t || !p.deadline) return; // task đã hoàn thành sẽ không có trong danh sách
+    if (p.status === 'done' && roles[p.role_id] && roles[p.role_id].has_status) return; // vai trò này đã xong phần mình
     const dl = diffDays_(today, p.deadline);
     let kind = null;
     if (dl >= 0 && dl <= days) kind = 'sap_den_han';
@@ -504,6 +507,74 @@ function daysSince_(iso) { if (!iso) return 999; return (Date.now() - new Date(i
 function indexBy_(arr, k) { const o = {}; (arr || []).forEach(x => { o[x[k]] = x; }); return o; }
 function str_(v) { return v === null || v === undefined ? '' : String(v).trim(); }
 function enc_(s) { return encodeURIComponent(s); }
+
+/* ============================ KIỂM TRA QUYỀN LINK SẢN PHẨM ============================ */
+// Kết quả: edit (ai có link đều sửa được) · club (chỉ tài khoản CLB sửa được) · view (chỉ xem)
+//          private (tài khoản CLB không mở được) · edit_link (link chỉnh sửa Canva – Canva không cho kiểm tra quyền thật)
+//          unknown (không nhận ra loại link)
+function linkCheck_(url) {
+  url = String(url || '').trim();
+  if (!url) return { state: '', note: '' };
+  const g = url.match(/docs\.google\.com\/(?:document|spreadsheets|presentation|forms|drawings)\/d\/([\w-]+)|drive\.google\.com\/(?:file\/d\/|drive\/folders\/|open\?id=)([\w-]+)/);
+  if (g) return driveCheck_(g[1] || g[2], /\/folders\//.test(url));
+  if (/(^https?:\/\/)?([\w-]+\.)?canva\.(com|link)\//i.test(url)) return canvaCheck_(url);
+  return { state: 'unknown', note: 'Không phải link Google Docs/Drive hay Canva – không kiểm tra được' };
+}
+
+function driveCheck_(id, isFolder) {
+  let f;
+  try { f = isFolder ? DriveApp.getFolderById(id) : DriveApp.getFileById(id); f.getName(); }
+  catch (e) { return { state: 'private', note: 'Tài khoản CLB không mở được file – chưa bật chia sẻ "Bất kỳ ai có đường liên kết"' }; }
+  let access = null, perm = null;
+  try { access = f.getSharingAccess(); perm = f.getSharingPermission(); } catch (e) { /* không đọc được cài đặt chia sẻ */ }
+  const open = access === DriveApp.Access.ANYONE_WITH_LINK || access === DriveApp.Access.ANYONE;
+  if (open && perm === DriveApp.Permission.EDIT) return { state: 'edit', note: 'Bất kỳ ai có link đều chỉnh sửa được' };
+  const me = Session.getEffectiveUser().getEmail();
+  let clubEdit = false;
+  try { clubEdit = (f.getOwner() && f.getOwner().getEmail() === me) || f.getEditors().some((u) => u.getEmail() === me); } catch (e) { /* chỉ có quyền xem */ }
+  if (clubEdit) return { state: 'club', note: 'Tài khoản CLB sửa được, nhưng người khác có link ' + (open ? 'chỉ xem/nhận xét được' : 'không mở được') };
+  if (open) return { state: 'view', note: 'Người có link chỉ ' + (perm === DriveApp.Permission.COMMENT ? 'nhận xét' : 'xem') + ' được – chưa cấp quyền chỉnh sửa' };
+  return { state: 'private', note: 'File chỉ chia sẻ riêng cho một số người – người khác có link không mở được' };
+}
+
+function canvaCheck_(url) {
+  let u = url;
+  for (let i = 0; i < 4 && /canva\.link\//i.test(u); i++) {
+    try {
+      const r = UrlFetchApp.fetch(u, { followRedirects: false, muteHttpExceptions: true });
+      const h = r.getHeaders();
+      const loc = h.Location || h.location;
+      if (!loc) break;
+      u = loc;
+    } catch (e) { break; }
+  }
+  const path = u.split('?')[0];
+  if (/\/design\/[\w-]+\/[\w-]+\/edit\/?$/i.test(path)) return { state: 'edit_link', note: 'Link chỉnh sửa Canva. Canva không cho kiểm tra quyền thật – hãy chắc chắn đã chọn "Bất kỳ ai có đường liên kết: Có thể chỉnh sửa".' };
+  if (/\/design\/[\w-]+(\/[\w-]+)?\/(view|watch)\/?$/i.test(path)) return { state: 'view', note: 'Link Canva chỉ để xem – hãy gửi link "Chỉnh sửa" (Chia sẻ → Liên kết cộng tác).' };
+  return { state: 'unknown', note: 'Không nhận ra dạng link Canva' };
+}
+
+function saveLinkCheck_(partId, res) {
+  db_.update('task_parts', 'id=eq.' + enc_(partId), { link_check: res.state, link_check_note: res.note, link_checked_at: new Date().toISOString() });
+}
+
+function checkPartLink_(partId) {
+  if (!partId) throw fail_('BAD_INPUT', 'Thiếu phần việc cần kiểm tra.');
+  const part = db_.select('task_parts', 'id=eq.' + enc_(partId) + '&select=id,link')[0];
+  if (!part) throw fail_('NOT_FOUND', 'Không tìm thấy phần việc này.');
+  const res = linkCheck_(part.link);
+  saveLinkCheck_(part.id, res);
+  return res;
+}
+
+// Mỗi sáng: kiểm tra lại link của các việc chưa xong (người làm có thể đã đổi quyền chia sẻ)
+function recheckLinks_() {
+  const open = {};
+  db_.selectAll('tasks', 'status=neq.done&select=id').forEach((t) => { open[t.id] = true; });
+  const parts = db_.selectAll('task_parts', 'link=neq.&select=id,task_id,link').filter((p) => open[p.task_id]).slice(0, 150);
+  parts.forEach((p) => { try { saveLinkCheck_(p.id, linkCheck_(p.link)); } catch (e) { console.error('Kiểm tra link lỗi: ' + p.link + ' – ' + e.message); } });
+  console.log('Đã kiểm tra quyền ' + parts.length + ' link.');
+}
 function extractEmail_(from) { const m = String(from || '').match(/<([^>]+)>/); return (m ? m[1] : String(from || '')).trim().toLowerCase(); }
 function escHtml_(s) { return str_(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function fail_(code, message) { const e = new Error(message); e.code = code; return e; }

@@ -163,6 +163,96 @@ drop trigger if exists tasks_before_write on public.tasks;
 create trigger tasks_before_write before insert or update on public.tasks
   for each row execute function public.tasks_before_write();
 
+-- ---------------------------------------------------------------- TRẠNG THÁI & LINK RIÊNG TỪNG VAI TRÒ
+-- Vai trò có has_status: mỗi phần việc có trạng thái riêng, trạng thái chung của công việc được tính tự động.
+-- Vai trò có has_link: mỗi phần việc có 1 link sản phẩm riêng (vd. link Content, link Design).
+alter table public.ban_roles add column if not exists has_status boolean not null default false;
+alter table public.ban_roles add column if not exists has_link boolean not null default false;
+do $$
+declare tt uuid; r_ct uuid; r_ds uuid;
+begin
+  if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'task_parts' and column_name = 'status') then
+    alter table public.task_parts add column status text not null default 'todo' check (status in ('todo', 'doing', 'done'));
+    alter table public.task_parts add column link text not null default '';
+    -- Chuyển dữ liệu cũ (chỉ chạy 1 lần): trạng thái chung → trạng thái từng vai trò
+    update public.task_parts p set status = t.status from public.tasks t where t.id = p.task_id;
+    select id into tt from public.bans where name = 'Ban Truyền thông';
+    if tt is not null then
+      update public.ban_roles set has_status = true, has_link = (label in ('Content', 'Design')) where ban_id = tt;
+      select id into r_ct from public.ban_roles where ban_id = tt and label = 'Content';
+      select id into r_ds from public.ban_roles where ban_id = tt and label = 'Design';
+      -- Link Google Docs → Content, link Canva → Design
+      update public.task_parts p set link = coalesce((select l->>'url' from public.tasks t, jsonb_array_elements(t.links) l
+        where t.id = p.task_id and l->>'url' ~* 'docs\.google\.com' limit 1), '') where p.role_id = r_ct;
+      update public.task_parts p set link = coalesce((select l->>'url' from public.tasks t, jsonb_array_elements(t.links) l
+        where t.id = p.task_id and l->>'url' ~* 'canva\.(com|link)' limit 1), '') where p.role_id = r_ds;
+      update public.tasks t set links = coalesce((select jsonb_agg(l) from jsonb_array_elements(t.links) l
+        where not ((r_ct is not null and l->>'url' ~* 'docs\.google\.com') or (r_ds is not null and l->>'url' ~* 'canva\.(com|link)'))), '[]'::jsonb)
+        where t.ban_id = tt;
+    end if;
+    alter table public.task_parts add constraint task_parts_link_http check (link = '' or link ~* '^https?://');
+  end if;
+end $$;
+
+-- Kết quả kiểm tra quyền chia sẻ của link (Apps Script ghi): edit / club / view / private / edit_link / unknown
+alter table public.task_parts add column if not exists link_check text not null default '';
+alter table public.task_parts add column if not exists link_check_note text not null default '';
+alter table public.task_parts add column if not exists link_checked_at timestamptz;
+create or replace function public.task_parts_before_write() returns trigger
+language plpgsql as $$
+begin
+  if tg_op = 'INSERT' or new.link is distinct from old.link then
+    new.link_check := ''; new.link_check_note := ''; new.link_checked_at := null;  -- link đổi → kết quả cũ không còn đúng
+  end if;
+  return new;
+end $$;
+drop trigger if exists task_parts_before_write on public.task_parts;
+create trigger task_parts_before_write before insert or update on public.task_parts
+  for each row execute function public.task_parts_before_write();
+
+-- Trạng thái chung = tính từ các vai trò có trạng thái riêng (chỉ xét vai trò đã có người được giao, nếu có)
+create or replace function public.sync_task_status(t uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare n int; nd int; nact int; st text; any_assigned boolean;
+begin
+  select bool_or(cardinality(p.assignee_ids) > 0) into any_assigned
+    from task_parts p join ban_roles r on r.id = p.role_id where p.task_id = t and r.has_status;
+  select count(*), count(*) filter (where p.status = 'done'), count(*) filter (where p.status <> 'todo')
+    into n, nd, nact
+    from task_parts p join ban_roles r on r.id = p.role_id
+    where p.task_id = t and r.has_status and (not coalesce(any_assigned, false) or cardinality(p.assignee_ids) > 0);
+  if n = 0 then return; end if;
+  st := case when nd = n then 'done' when nact > 0 then 'doing' else 'todo' end;
+  update tasks set status = st where id = t and status is distinct from st;
+end $$;
+
+create or replace function public.task_parts_after_write() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  perform sync_task_status(new.task_id);
+  return null;
+end $$;
+drop trigger if exists task_parts_after_write on public.task_parts;
+create trigger task_parts_after_write after insert or update on public.task_parts
+  for each row execute function public.task_parts_after_write();
+
+-- Người được giao 1 vai trò tự cập nhật trạng thái + link của phần mình (không sửa được phần khác)
+create or replace function public.update_task_part(p_part uuid, p_status text, p_link text) returns void
+language plpgsql security definer set search_path = public as $$
+declare tid uuid; ids uuid[];
+begin
+  select task_id, assignee_ids into tid, ids from task_parts where id = p_part;
+  if tid is null then raise exception 'Không tìm thấy phần việc này'; end if;
+  if not (can_manage_task(tid) or my_member_id() = any(ids)) then
+    raise exception 'Bạn chỉ được cập nhật phần việc được giao cho mình';
+  end if;
+  if p_status not in ('todo', 'doing', 'done') then raise exception 'Trạng thái không hợp lệ'; end if;
+  if coalesce(p_link, '') <> '' and p_link !~* '^https?://' then
+    raise exception 'Liên kết phải bắt đầu bằng http:// hoặc https://';
+  end if;
+  update task_parts set status = p_status, link = coalesce(trim(p_link), '') where id = p_part;
+end $$;
+
 -- ---------------------------------------------------------------- RPC
 -- Thành viên đánh dấu đã đổi mật khẩu lần đầu
 create or replace function public.mark_password_changed() returns void

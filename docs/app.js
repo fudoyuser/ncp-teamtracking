@@ -64,7 +64,13 @@
   const isAssignee = (t) => t.parts.some((p) => p.assigneeIds.includes(me().id));
   const canFull = (t) => canManageBan(t.banId) || isTaskLead(t);
   const canEdit = (t) => canFull(t) || isAssignee(t);
-  const partFor = (t, roleId) => t.parts.find((p) => p.roleId === roleId) || { roleId, deadline: '', assigneeIds: [] };
+  const partFor = (t, roleId) => t.parts.find((p) => p.roleId === roleId) || { roleId, deadline: '', assigneeIds: [], status: 'todo', link: '' };
+  // Ban có vai trò "trạng thái riêng": trạng thái chung của công việc do CSDL tự tính từ từng vai trò
+  const partMode = (b) => !!b && b.roles.some((r) => r.hasStatus);
+  const linkMode = (b) => !!b && b.roles.some((r) => r.hasLink);
+  const canEditPart = (t, p) => !!p.id && (canFull(t) || p.assigneeIds.includes(me().id));
+  const partDone = (t, r, p) => (r && r.hasStatus ? p.status === 'done' : isDone(t));
+  const isHttp = (u) => /^https?:\/\//i.test(String(u || ''));
   const finalDeadline = (t) => t.parts.map((p) => p.deadline).filter(Boolean).sort().pop() || '';
   const isLate = (t) => !isDone(t) && t.parts.some((p) => p.deadline && daysUntil(p.deadline) < 0);
   const activeMembers = () => D().members.filter((m) => m.active);
@@ -210,9 +216,34 @@
     return `<span class="badge">${fmtDate(iso)}</span>`;
   }
   function statusControl(t) {
+    if (partMode(banById(t.banId))) return `<span class="status s-${t.status}" title="Tự tính từ trạng thái từng vai trò">${STATUS[t.status]}</span>`;
     if (!canEdit(t)) return `<span class="status s-${t.status}">${STATUS[t.status]}</span>`;
     return `<select class="status-select s-${t.status}" data-change="status" data-id="${esc(t.id)}" aria-label="Trạng thái">
       ${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select>`;
+  }
+  function partStatusControl(t, r, p) {
+    if (!r.hasStatus) return '';
+    const st = p.status || 'todo';
+    if (!canEditPart(t, p)) return `<span class="status small s-${st}">${STATUS[st]}</span>`;
+    return `<select class="status-select small s-${st}" data-change="part-status" data-id="${esc(t.id)}" data-part="${esc(p.id)}" aria-label="Trạng thái ${esc(r.label)}">
+      ${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === st ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select>`;
+  }
+  const LINKCHECK = {
+    edit: ['ok', '✅ Sửa được'], club: ['warn', '🟡 Chỉ CLB sửa được'], view: ['danger', '👁 Chỉ xem'],
+    private: ['danger', '🔒 Chưa chia sẻ'], edit_link: ['ok', '✏️ Link sửa (Canva)'], unknown: ['muted', '❓ Không rõ'],
+  };
+  function linkCheckBadge(t, p) {
+    if (!isHttp(p.link)) return '';
+    const c = LINKCHECK[p.linkCheck];
+    const tip = c ? (p.linkCheckNote || '') + (p.linkCheckedAt ? ' · kiểm tra ' + fmtDate(p.linkCheckedAt.slice(0, 10)) : '') + ' – bấm để kiểm tra lại' : 'Chưa kiểm tra quyền – bấm để kiểm tra';
+    return `<button type="button" class="badge lc ${c ? c[0] : 'muted'}" data-act="part-check" data-id="${esc(t.id)}" data-part="${esc(p.id)}" title="${esc(tip)}">${c ? c[1] : '🔍 Kiểm tra quyền'}</button>`;
+  }
+  function partLinkControl(t, r, p) {
+    if (!r.hasLink || (!p.assigneeIds.length && !p.link)) return '';
+    const edit = canEditPart(t, p);
+    const a = isHttp(p.link) ? `<a class="link" href="${esc(p.link)}" target="_blank" rel="noopener">🔗 ${esc(r.label)}</a>` : '';
+    const btn = edit ? `<button class="btn ghost small" data-act="part-link" data-id="${esc(t.id)}" data-part="${esc(p.id)}">${a ? '✎' : '＋ Link ' + esc(r.label)}</button>` : '';
+    return a || btn ? `<div class="part-link">${a}${btn}${a ? linkCheckBadge(t, p) : ''}</div>` : '';
   }
   function chip(id) {
     const m = memberById(id);
@@ -226,8 +257,12 @@
   function viewMine() {
     const myId = me().id;
     const items = [];
-    D().tasks.forEach((t) => t.parts.forEach((p) => { if (p.assigneeIds.includes(myId)) items.push({ t, p, d: daysUntil(p.deadline) }); }));
-    const open = items.filter((x) => !isDone(x.t));
+    D().tasks.forEach((t) => t.parts.forEach((p) => {
+      if (!p.assigneeIds.includes(myId)) return;
+      const ban = banById(t.banId);
+      items.push({ t, p, r: ban && roleById(ban, p.roleId), d: daysUntil(p.deadline) });
+    }));
+    const open = items.filter((x) => !partDone(x.t, x.r, x.p));
     const groups = [
       ['🔴 Quá hạn', (x) => x.d !== null && x.d < 0],
       ['🟠 Hôm nay & ngày mai', (x) => x.d !== null && x.d >= 0 && x.d <= 1],
@@ -245,9 +280,9 @@
           <div class="tc-title">${esc(t.name)}</div>
           <div class="tc-meta">${esc(eventLabel(t.eventId))} · ${esc(ban ? ban.name : '')}${ban && ban.roles.length > 1 && role ? ' · <b>' + esc(role.label) + '</b>' : ''}</div>
           ${t.note ? `<div class="tc-note">${esc(t.note)}</div>` : ''}
-          <div class="tc-links">${linksOf(t)}</div>
+          <div class="tc-links">${linksOf(t)}${role ? partLinkControl(t, role, p) : ''}</div>
         </div>
-        <div class="tc-side">${deadlineBadge(p.deadline, false)}${statusControl(t)}
+        <div class="tc-side">${deadlineBadge(p.deadline, false)}${role && role.hasStatus ? partStatusControl(t, role, p) : statusControl(t)}
           <button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">Chi tiết</button></div></div>`;
     };
     let html = antispamBanner();
@@ -333,14 +368,15 @@
           <div class="progress" role="img" aria-label="${done}/${evAll.length} việc hoàn thành"><div style="width:${pct(done, evAll.length) || 0}%"></div></div>
           <span class="muted small">${done}/${evAll.length} xong</span></div>
         <div class="table-wrap"><table class="tasks">
-          <thead><tr><th>Công việc</th>${b.roles.map((r) => `<th>${esc(r.label)}</th>`).join('')}<th>Lead</th><th>Trạng thái</th><th>Liên kết</th><th></th></tr></thead>
+          <thead><tr><th>Công việc</th>${b.roles.map((r) => `<th>${esc(r.label)}</th>`).join('')}<th>Lead</th><th>Trạng thái</th>${linkMode(b) ? '' : '<th>Liên kết</th>'}<th></th></tr></thead>
           <tbody>${rows.map((t) => `<tr class="${isDone(t) ? 'done' : ''} ${isAssignee(t) ? 'mine' : ''}">
-            <td class="c-name"><b>${esc(t.name)}</b>${t.note ? `<div class="note">${esc(t.note)}</div>` : ''}</td>
+            <td class="c-name"><b>${esc(t.name)}</b>${t.note ? `<div class="note">${esc(t.note)}</div>` : ''}${linkMode(b) && t.links.length ? `<div class="c-links">${linksOf(t)}</div>` : ''}</td>
             ${b.roles.map((r) => { const p = partFor(t, r.id); return `<td class="c-role">${p.assigneeIds.length ? p.assigneeIds.map(chip).join('') : '<span class="chip empty">Chưa giao</span>'}
-              ${r.hasDeadline ? '<div>' + deadlineBadge(p.deadline, isDone(t)) + '</div>' : ''}</td>`; }).join('')}
+              ${r.hasDeadline ? '<div>' + deadlineBadge(p.deadline, partDone(t, r, p)) + '</div>' : ''}
+              ${r.hasStatus && (p.assigneeIds.length || p.status !== 'todo') ? '<div>' + partStatusControl(t, r, p) + '</div>' : ''}${partLinkControl(t, r, p)}</td>`; }).join('')}
             <td>${t.leadIds.map(chip).join('')}</td>
             <td>${statusControl(t)}</td>
-            <td class="c-links">${linksOf(t)}</td>
+            ${linkMode(b) ? '' : `<td class="c-links">${linksOf(t)}</td>`}
             <td><button class="btn ghost small" data-act="edit" data-id="${esc(t.id)}">${canEdit(t) ? 'Sửa' : 'Xem'}</button></td>
           </tr>`).join('')}</tbody></table></div></section>`;
     }).join('');
@@ -389,16 +425,19 @@
     openModal(`<form id="task-form">
       ${modalHead(creating ? 'Thêm công việc' : editable ? 'Sửa công việc' : 'Chi tiết công việc', b.name)}
       <div class="m-body">
-        ${!full && editable ? '<p class="hint">Bạn được giao việc này: có thể cập nhật trạng thái, ghi chú và liên kết.</p>' : ''}
+        ${!full && editable ? `<p class="hint">Bạn được giao việc này: có thể cập nhật ${partMode(b) ? 'trạng thái và link phần việc của mình' : 'trạng thái'}, ghi chú và liên kết.</p>` : ''}
         <label>Tên công việc *<input name="name" required value="${esc(t.name)}" ${dis}></label>
         <label>Sự kiện ${eventSelect(t.eventId, !full, full && canCreateEvent())}</label>
         <div class="roles">${b.roles.map((r) => { const p = partFor(t, r.id); return `<fieldset><legend>${esc(r.label)}</legend>
           ${peopleEditor('role:' + r.id, p.assigneeIds, b.id, !full)}
-          ${r.hasDeadline ? `<label class="inline">Deadline <input type="date" name="dl:${esc(r.id)}" value="${esc(p.deadline)}" ${dis}></label>` : ''}</fieldset>`; }).join('')}</div>
+          ${r.hasDeadline ? `<label class="inline">Deadline <input type="date" name="dl:${esc(r.id)}" value="${esc(p.deadline)}" ${dis}></label>` : ''}
+          ${r.hasStatus ? `<label class="inline">Trạng thái <select name="st:${esc(r.id)}" ${full || canEditPart(t, p) ? '' : 'disabled'}>${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === (p.status || 'todo') ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select></label>` : ''}
+          ${r.hasLink ? `<label class="inline">Link ${esc(r.label)} <input name="ln:${esc(r.id)}" placeholder="https://…" value="${esc(p.link || '')}" ${full || canEditPart(t, p) ? '' : 'disabled'}></label>` : ''}</fieldset>`; }).join('')}</div>
         <div class="field"><span class="lbl">Lead CV</span>${peopleEditor('lead', t.leadIds, b.id, !full)}</div>
-        <label>Trạng thái<select name="status" ${editable ? '' : 'disabled'}>${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select></label>
+        ${partMode(b) ? `<p class="muted small">Trạng thái chung: <b>${STATUS[t.status]}</b> – tự tính từ trạng thái từng vai trò (xong hết = Hoàn thành).</p>`
+          : `<label>Trạng thái<select name="status" ${editable ? '' : 'disabled'}>${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select></label>`}
         <label>Ghi chú<textarea name="note" rows="3" ${editable ? '' : 'disabled'}>${esc(t.note)}</textarea></label>
-        <div class="field"><span class="lbl">Liên kết sản phẩm</span><div id="links">
+        <div class="field ${linkMode(b) && !t.links.length ? 'hidden' : ''}"><span class="lbl">${linkMode(b) ? 'Liên kết khác' : 'Liên kết sản phẩm'}</span><div id="links">
           ${links.map((l) => linkRow(l, !editable)).join('')}</div>
           ${editable ? '<button type="button" class="btn ghost small" data-act="link-add">＋ Thêm liên kết</button>' : ''}</div>
       </div>
@@ -418,7 +457,15 @@
     const labels = fd.getAll('linkLabel'), urls = fd.getAll('linkUrl');
     const links = urls.map((u, i) => ({ label: String(labels[i] || '').trim(), url: String(u || '').trim() })).filter((l) => l.url);
     if (links.some((l) => !/^https?:\/\//i.test(l.url))) return toast('Liên kết phải bắt đầu bằng http:// hoặc https://', 'error');
-    const task = { id: t.id, banId: b.id, status: fd.get('status'), note: String(fd.get('note') || '').trim(), links };
+    const pm = partMode(b);
+    const partVals = b.roles.map((r) => {
+      const p = partFor(t, r.id);
+      const st = r.hasStatus && fd.get('st:' + r.id) ? fd.get('st:' + r.id) : (p.status || 'todo');
+      const ln = r.hasLink && fd.get('ln:' + r.id) !== null ? String(fd.get('ln:' + r.id) || '').trim() : (p.link || '');
+      return { r, p, status: st, link: ln };
+    });
+    if (partVals.some((x) => x.link && !isHttp(x.link))) return toast('Link phải bắt đầu bằng http:// hoặc https://', 'error');
+    const task = { id: t.id, banId: b.id, status: pm ? t.status : fd.get('status'), note: String(fd.get('note') || '').trim(), links };
     await run(async () => {
       if (full) {
         task.name = String(fd.get('name') || '').trim();
@@ -433,14 +480,21 @@
         }
         task.eventId = ev || null;
         task.leadIds = chipIds(form, 'lead');
-        task.parts = b.roles.map((r) => ({ roleId: r.id, assigneeIds: chipIds(form, 'role:' + r.id), deadline: r.hasDeadline ? fd.get('dl:' + r.id) || '' : '' }));
+        task.parts = partVals.map((x) => ({ roleId: x.r.id, assigneeIds: chipIds(form, 'role:' + x.r.id), deadline: x.r.hasDeadline ? fd.get('dl:' + x.r.id) || '' : '', status: x.status, link: x.link }));
       }
-      const saved = await S.saveTask(task, full);
+      let saved = await S.saveTask(task, full);
+      if (!full) {
+        // Người được giao: cập nhật trạng thái + link phần của mình
+        const changed = partVals.filter((x) => canEditPart(t, x.p) && (x.status !== (x.p.status || 'todo') || x.link !== (x.p.link || '')));
+        for (const x of changed) saved = await S.savePart(t.id, x.p.id, x.status, x.link);
+      }
+      const relink = partVals.filter((x) => x.r.hasLink && x.link && x.link !== (x.p.link || '')).map((x) => (saved.parts.find((y) => y.roleId === x.r.id) || {}).id).filter(Boolean);
       const i = D().tasks.findIndex((x) => x.id === saved.id);
       if (i >= 0) D().tasks[i] = saved; else D().tasks.push(saved);
       closeModal();
       toast(creating ? 'Đã thêm công việc.' : 'Đã lưu.');
       renderMain();
+      if (relink.length) checkPartLinks(saved, relink);
     }, $('#save-btn'));
   }
 
@@ -1070,7 +1124,7 @@
     tasks.forEach((t) => t.parts.forEach((p) => p.assigneeIds.forEach((mid) => {
       const r = mrows[mid];
       if (!r) return;
-      if (!isDone(t)) { r.open++; if (p.deadline && daysUntil(p.deadline) < 0) r.late++; return; }
+      if (!partDone(t, roleById(banById(t.banId), p.roleId), p)) { r.open++; if (p.deadline && daysUntil(p.deadline) < 0) r.late++; return; }
       const dd = doneDate(t);
       if (!dd || (rangeStart && dd < rangeStart)) return;
       r.done++;
@@ -1265,13 +1319,13 @@
   }
 
   function adminBans() {
-    return `<div class="page-head row"><div><h2>Ban & vai trò</h2><p class="muted">Mỗi vai trò là một cột "người phụ trách + deadline" trong bảng công việc của Ban (vd. Ban Truyền thông: Content / Design / Đăng bài).</p></div>
+    return `<div class="page-head row"><div><h2>Ban & vai trò</h2><p class="muted">Mỗi vai trò là một cột "người phụ trách + deadline" trong bảng công việc của Ban (vd. Ban Truyền thông: Content / Design / Đăng bài). Bật "Trạng thái riêng" để mỗi vai trò tự cập nhật tiến độ – công việc chỉ Hoàn thành khi mọi vai trò xong; bật "Link sản phẩm" để mỗi vai trò có link riêng.</p></div>
       <div class="actions"><button class="btn primary" data-act="edit-ban">＋ Thêm Ban</button></div></div>
       <div class="grid2">${[...D().bans].sort((a, b) => a.sort - b.sort).map((b) => {
         const n = D().tasks.filter((t) => t.banId === b.id).length;
         const mem = activeMembers().filter((m) => m.bans.some((x) => x.banId === b.id));
         return `<div class="card"><div class="row-between"><h3>${esc(b.name)}</h3><button class="btn ghost small" data-act="edit-ban" data-id="${esc(b.id)}">Sửa</button></div>
-          <p class="small">Vai trò: ${b.roles.map((r) => `<span class="chip">${esc(r.label)}${r.hasDeadline ? '' : ' (không deadline)'}</span>`).join('') || '<span class="muted">chưa có</span>'}</p>
+          <p class="small">Vai trò: ${b.roles.map((r) => `<span class="chip">${esc(r.label)}${r.hasDeadline ? '' : ' (không deadline)'}${r.hasStatus ? ' · trạng thái riêng' : ''}${r.hasLink ? ' · link' : ''}</span>`).join('') || '<span class="muted">chưa có</span>'}</p>
           <p class="muted small">${n} công việc · ${mem.length} thành viên · Trưởng ban: ${esc(mem.filter((m) => m.bans.some((x) => x.banId === b.id && x.isLead)).map((m) => m.name).join(', ') || 'chưa có')}</p></div>`;
       }).join('')}</div>`;
   }
@@ -1282,6 +1336,8 @@
     const roleRow = (r) => `<div class="role-row" data-role-id="${esc(r.id || '')}">
       <input name="roleLabel" value="${esc(r.label)}" placeholder="Tên vai trò (vd. Content)" required aria-label="Tên vai trò">
       <label class="check small"><input type="checkbox" name="roleDl" ${r.hasDeadline ? 'checked' : ''}> Có deadline</label>
+      <label class="check small"><input type="checkbox" name="roleSt" ${r.hasStatus ? 'checked' : ''}> Trạng thái riêng</label>
+      <label class="check small"><input type="checkbox" name="roleLn" ${r.hasLink ? 'checked' : ''}> Link sản phẩm</label>
       <button type="button" class="btn ghost small" data-act="role-up" aria-label="Lên">↑</button>
       <button type="button" class="btn ghost small" data-act="role-x" aria-label="Xóa vai trò">✕</button></div>`;
     openModal(`<form id="ban-form">${modalHead(creating ? 'Thêm Ban' : 'Sửa Ban')}
@@ -1298,7 +1354,8 @@
     $('#ban-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const form = ev.target;
-      const roles = $$('.role-row', form).map((row) => ({ id: row.dataset.roleId || null, label: row.querySelector('[name=roleLabel]').value.trim(), hasDeadline: row.querySelector('[name=roleDl]').checked }));
+      const roles = $$('.role-row', form).map((row) => ({ id: row.dataset.roleId || null, label: row.querySelector('[name=roleLabel]').value.trim(), hasDeadline: row.querySelector('[name=roleDl]').checked,
+        hasStatus: row.querySelector('[name=roleSt]').checked, hasLink: row.querySelector('[name=roleLn]').checked }));
       if (!roles.length) return toast('Ban cần ít nhất 1 vai trò.', 'error');
       const keep = roles.map((r) => r.id).filter(Boolean);
       const removed = creating ? [] : b.roles.map((r) => r.id).filter((id) => !keep.includes(id));
@@ -1449,6 +1506,20 @@
     renderMain();
   }
   const findTask = (id) => D().tasks.find((t) => t.id === id);
+  // Hỏi Apps Script quyền chia sẻ của link (Google Docs: kiểm tra thật; Canva: chỉ biết link sửa hay link xem)
+  async function checkPartLinks(t, partIds, loud) {
+    for (const id of partIds) {
+      const p = t.parts.find((x) => x.id === id);
+      if (!p || !isHttp(p.link)) continue;
+      try {
+        const res = await S.checkLink(id);
+        Object.assign(p, { linkCheck: res.state, linkCheckNote: res.note, linkCheckedAt: new Date().toISOString() });
+        const good = ['edit', 'edit_link'].includes(res.state);
+        if (loud || !good) toast((LINKCHECK[res.state] || ['', 'Đã kiểm tra'])[1] + ' – ' + res.note, good ? '' : 'error');
+      } catch (e) { if (loud) toast('Không kiểm tra được link: ' + e.message, 'error'); }
+    }
+    renderMain();
+  }
   const actions = {
     view: (el) => { state.view = el.dataset.view; ss.set('view', state.view); render(); window.scrollTo(0, 0); },
     'admin-tab': (el) => { state.adminTab = el.dataset.tab; ss.set('adminTab', state.adminTab); renderMain(); },
@@ -1461,6 +1532,18 @@
     'chip-x': (el) => el.closest('.chip').remove(),
     'link-add': () => $('#links').insertAdjacentHTML('beforeend', linkRow({ label: '', url: '' }, false)),
     'link-x': (el) => el.closest('.link-row').remove(),
+    'part-link': async (el) => {
+      const t = findTask(el.dataset.id);
+      const p = t && t.parts.find((x) => x.id === el.dataset.part);
+      if (!p) return;
+      const role = roleById(banById(t.banId), p.roleId);
+      const url = prompt('Link ' + (role ? role.label : 'sản phẩm') + ' (để trống để xóa):', p.link || '');
+      if (url === null) return;
+      if (url.trim() && !isHttp(url.trim())) return toast('Link phải bắt đầu bằng http:// hoặc https://', 'error');
+      await run(async () => { Object.assign(t, await S.savePart(t.id, p.id, p.status || 'todo', url.trim())); toast('Đã lưu link.'); renderMain(); });
+      if (url.trim()) checkPartLinks(findTask(t.id), [p.id]);
+    },
+    'part-check': (el) => { const t = findTask(el.dataset.id); if (t) checkPartLinks(t, [el.dataset.part], true); },
     antispam: () => openAntispam(),
     'gmail-filter': (el) => createGmailFilter(el),
     'change-pw': () => {
@@ -1616,6 +1699,19 @@
         renderMain();
       });
       if (t.status === prev) { el.value = prev; el.disabled = false; }
+    } else if (el.dataset.change === 'part-status') {
+      const t = findTask(el.dataset.id);
+      const p = t && t.parts.find((x) => x.id === el.dataset.part);
+      if (!p) return;
+      const prev = p.status;
+      el.disabled = true;
+      await run(async () => {
+        const saved = await S.savePart(t.id, p.id, el.value, p.link);
+        Object.assign(t, saved);
+        toast(saved.status === 'done' ? '🎉 Công việc đã hoàn thành!' : el.value === 'done' ? '✓ Đã xong phần của bạn.' : 'Đã cập nhật trạng thái.');
+        renderMain();
+      });
+      if (p.status === prev) { el.value = prev; el.disabled = false; }
     } else if (el.dataset.change === 'seed-self') {
       el.disabled = true;
       const cur = checkOf(el.dataset.cid, me().id, el.dataset.action) || {};

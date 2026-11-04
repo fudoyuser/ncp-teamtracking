@@ -13,7 +13,8 @@
   const mapTask = (t, parts) => ({
     id: t.id, banId: t.ban_id, eventId: t.event_id, name: t.name, status: t.status, note: t.note || '',
     leadIds: t.lead_ids || [], links: Array.isArray(t.links) ? t.links : [], doneAt: t.done_at, createdAt: t.created_at,
-    parts: parts.filter((p) => p.task_id === t.id).map((p) => ({ id: p.id, roleId: p.role_id, deadline: p.deadline || '', assigneeIds: p.assignee_ids || [] })),
+    parts: parts.filter((p) => p.task_id === t.id).map((p) => ({ id: p.id, roleId: p.role_id, deadline: p.deadline || '', assigneeIds: p.assignee_ids || [], status: p.status || 'todo', link: p.link || '',
+      linkCheck: p.link_check || '', linkCheckNote: p.link_check_note || '', linkCheckedAt: p.link_checked_at || null })),
   });
   const mapCampaign = (c) => ({ id: c.id, title: c.title, postUrl: c.post_url || '', actions: c.actions || [], deadline: c.deadline || '',
     memberIds: c.member_ids || [], banId: c.ban_id, createdBy: c.created_by, createdAt: c.created_at });
@@ -94,7 +95,7 @@
         const c = {};
         confirms.forEach((x) => { c[x.member_id] = mapConfirm(x); });
         return {
-          bans: bans.map((b) => ({ id: b.id, name: b.name, sort: b.sort, roles: roles.filter((r) => r.ban_id === b.id).map((r) => ({ id: r.id, label: r.label, hasDeadline: r.has_deadline, sort: r.sort })) })),
+          bans: bans.map((b) => ({ id: b.id, name: b.name, sort: b.sort, roles: roles.filter((r) => r.ban_id === b.id).map((r) => ({ id: r.id, label: r.label, hasDeadline: r.has_deadline, hasStatus: !!r.has_status, hasLink: !!r.has_link, sort: r.sort })) })),
           members: members.map((m) => mapMember(m, mbs)),
           events: events.map((e) => ({ id: e.id, name: e.name, date: e.event_date || '' })),
           tasks: tasks.map((t) => mapTask(t, parts)),
@@ -110,10 +111,19 @@
         if (id) await q(sb.from('tasks').update(row).eq('id', id));
         else id = (await q(sb.from('tasks').insert(row).select('id').single())).id;
         if (full && t.parts) {
-          await q(sb.from('task_parts').upsert(t.parts.map((p) => ({ task_id: id, role_id: p.roleId, deadline: p.deadline || null, assignee_ids: p.assigneeIds })), { onConflict: 'task_id,role_id' }));
+          await q(sb.from('task_parts').upsert(t.parts.map((p) => ({ task_id: id, role_id: p.roleId, deadline: p.deadline || null, assignee_ids: p.assigneeIds,
+            status: p.status || 'todo', link: p.link || '' })), { onConflict: 'task_id,role_id' }));
         }
+        return this.loadTask(id);
+      },
+      async loadTask(id) {
         const [tr, pr] = await Promise.all([q(sb.from('tasks').select('*').eq('id', id).single()), q(sb.from('task_parts').select('*').eq('task_id', id))]);
         return mapTask(tr, pr);
+      },
+      // Trạng thái + link của 1 vai trò; trạng thái chung do CSDL tự tính
+      async savePart(taskId, partId, status, link) {
+        await q(sb.rpc('update_task_part', { p_part: partId, p_status: status, p_link: link || '' }));
+        return this.loadTask(taskId);
       },
       async deleteTask(id) { await q(sb.from('tasks').delete().eq('id', id)); },
       async cloneEvent(banId, fromEventId, toName, toDate, keepPeople, keepNotes) {
@@ -131,7 +141,7 @@
         else id = (await q(sb.from('bans').insert({ name: b.name, sort: b.sort }).select('id').single())).id;
         if (removedRoleIds.length) await q(sb.from('ban_roles').delete().in('id', removedRoleIds));
         for (const [i, r] of b.roles.entries()) {
-          const row = { ban_id: id, label: r.label, has_deadline: r.hasDeadline, sort: i + 1 };
+          const row = { ban_id: id, label: r.label, has_deadline: r.hasDeadline, has_status: !!r.hasStatus, has_link: !!r.hasLink, sort: i + 1 };
           if (r.id) await q(sb.from('ban_roles').update(row).eq('id', r.id));
           else await q(sb.from('ban_roles').insert(row));
         }
@@ -147,6 +157,7 @@
       resetPassword: (id) => script('resetPassword', { memberId: id }),
       setActive: (id, active) => script('setActive', { memberId: id, active }),
       resendConfirm: (ids) => script('resendConfirm', { memberIds: ids || [] }),
+      checkLink: (partId) => script('checkLink', { partId }),
       async markFilter() { await q(sb.rpc('mark_gmail_filter')); },
       async setMyFacebook(name, url) { await q(sb.rpc('set_my_facebook', { p_name: name, p_url: url })); },
       async setMemberFacebook(id, name, url) { await q(sb.from('members').update({ fb_name: name, fb_url: url }).eq('id', id)); },
@@ -185,10 +196,23 @@
     const iso = (off) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + off); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
     const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
     const clone = (o) => JSON.parse(JSON.stringify(o));
+    // Giống CSDL: trạng thái chung tính từ các vai trò có trạng thái riêng (ưu tiên vai trò đã giao người)
+    const syncStatus = (row) => {
+      const ban = db.bans.find((b) => b.id === row.banId);
+      const roleIds = ban ? ban.roles.filter((r) => r.hasStatus).map((r) => r.id) : [];
+      let ps = row.parts.filter((p) => roleIds.includes(p.roleId));
+      if (ps.some((p) => p.assigneeIds.length)) ps = ps.filter((p) => p.assigneeIds.length);
+      if (!ps.length) return;
+      const st = ps.every((p) => p.status === 'done') ? 'done' : ps.some((p) => p.status && p.status !== 'todo') ? 'doing' : 'todo';
+      if (st === 'done' && row.status !== 'done') row.doneAt = new Date().toISOString();
+      if (st !== 'done') row.doneAt = null;
+      row.status = st;
+    };
 
     const SK = { id: 'ban-sk', name: 'Ban Sự kiện', sort: 1, roles: [{ id: 'r-pt', label: 'Phụ trách', hasDeadline: true, sort: 1 }] };
     const TT = { id: 'ban-tt', name: 'Ban Truyền thông', sort: 2, roles: [
-      { id: 'r-ct', label: 'Content', hasDeadline: true, sort: 1 }, { id: 'r-ds', label: 'Design', hasDeadline: true, sort: 2 }, { id: 'r-db', label: 'Đăng bài', hasDeadline: true, sort: 3 }] };
+      { id: 'r-ct', label: 'Content', hasDeadline: true, hasStatus: true, hasLink: true, sort: 1 }, { id: 'r-ds', label: 'Design', hasDeadline: true, hasStatus: true, hasLink: true, sort: 2 },
+      { id: 'r-db', label: 'Đăng bài', hasDeadline: true, hasStatus: true, hasLink: false, sort: 3 }] };
     const db = {
       bans: [SK, TT],
       members: [
@@ -211,7 +235,7 @@
     const add = (banId, eventId, name, status, parts, opts = {}) => {
       const t = { id: uid(), banId, eventId, name, status, note: opts.note || '', leadIds: opts.lead || [], links: opts.links || [],
         doneAt: status === 'done' ? daysAgo(opts.doneAgo ?? 3) : null, createdAt: daysAgo(40),
-        parts: parts.map(([roleId, people, off]) => ({ id: uid(), roleId, assigneeIds: people, deadline: off === null ? '' : iso(off) })) };
+        parts: parts.map(([roleId, people, off]) => ({ id: uid(), roleId, assigneeIds: people, deadline: off === null ? '' : iso(off), status: status === 'doing' ? (people.length ? 'doing' : 'todo') : status, link: '' })) };
       db.tasks.push(t);
     };
     // Sự kiện đã qua – để Dashboard có số liệu lịch sử
@@ -278,10 +302,37 @@
           Object.assign(row, { banId: t.banId, eventId: t.eventId || null, name: t.name, leadIds: t.leadIds });
           t.parts.forEach((p) => {
             const ex = row.parts.find((x) => x.roleId === p.roleId);
-            if (ex) Object.assign(ex, { deadline: p.deadline, assigneeIds: p.assigneeIds });
-            else row.parts.push({ id: uid(), roleId: p.roleId, deadline: p.deadline, assigneeIds: p.assigneeIds });
+            const val = { deadline: p.deadline, assigneeIds: p.assigneeIds, status: p.status || 'todo', link: p.link || '' };
+            if (ex) Object.assign(ex, val);
+            else row.parts.push(Object.assign({ id: uid(), roleId: p.roleId }, val));
           });
+          syncStatus(row);
         }
+        return clone(row);
+      },
+      async loadTask(id) { await wait(); return clone(db.tasks.find((x) => x.id === id)); },
+      async checkLink(partId) {
+        await wait();
+        const p = db.tasks.flatMap((t) => t.parts).find((x) => x.id === partId);
+        const u = (p && p.link) || '';
+        const res = /docs\.google\.com/.test(u) ? (/edit/.test(u) ? { state: 'edit', note: 'Bất kỳ ai có link đều chỉnh sửa được (demo)' } : { state: 'view', note: 'Người có link chỉ xem được (demo)' })
+          : /canva/.test(u) ? (/\/edit/.test(u) ? { state: 'edit_link', note: 'Link chỉnh sửa Canva (demo)' } : { state: 'view', note: 'Link Canva chỉ để xem (demo)' })
+          : { state: 'unknown', note: 'Không kiểm tra được (demo)' };
+        if (p) Object.assign(p, { linkCheck: res.state, linkCheckNote: res.note, linkCheckedAt: new Date().toISOString() });
+        return res;
+      },
+      async savePart(taskId, partId, status, link) {
+        await wait();
+        const row = db.tasks.find((x) => x.id === taskId);
+        const p = row && row.parts.find((x) => x.id === partId);
+        if (!p) throw err('Không tìm thấy phần việc này');
+        const ban = db.bans.find((b) => b.id === row.banId);
+        const isMgr = me().isAdmin || me().bans.some((x) => x.banId === ban.id && x.isLead) || row.leadIds.includes(meId);
+        if (!isMgr && !p.assigneeIds.includes(meId)) throw err('Bạn chỉ được cập nhật phần việc được giao cho mình');
+        if (link && !/^https?:\/\//i.test(link)) throw err('Liên kết phải bắt đầu bằng http:// hoặc https://');
+        if ((link || '') !== p.link) Object.assign(p, { linkCheck: '', linkCheckNote: '', linkCheckedAt: null });
+        Object.assign(p, { status, link: link || '' });
+        syncStatus(row);
         return clone(row);
       },
       async deleteTask(id) { await wait(); db.tasks = db.tasks.filter((t) => t.id !== id); },
@@ -294,7 +345,7 @@
         const src = db.tasks.filter((t) => t.banId === banId && t.eventId === fromEventId);
         src.forEach((s) => db.tasks.push({ id: uid(), banId, eventId: ev.id, name: s.name, status: 'todo', note: keepNotes ? s.note : '',
           leadIds: keepPeople ? s.leadIds.slice() : [], links: [], doneAt: null, createdAt: new Date().toISOString(),
-          parts: s.parts.map((p) => ({ id: uid(), roleId: p.roleId, deadline: '', assigneeIds: keepPeople ? p.assigneeIds.slice() : [] })) }));
+          parts: s.parts.map((p) => ({ id: uid(), roleId: p.roleId, deadline: '', assigneeIds: keepPeople ? p.assigneeIds.slice() : [], status: 'todo', link: '' })) }));
         return src.length;
       },
       async saveEvent(e) {
@@ -311,7 +362,7 @@
         let ban = db.bans.find((x) => x.id === b.id);
         if (!ban) { ban = { id: uid(), roles: [] }; db.bans.push(ban); }
         ban.name = b.name; ban.sort = b.sort;
-        ban.roles = b.roles.map((r, i) => ({ id: r.id || uid(), label: r.label, hasDeadline: r.hasDeadline, sort: i + 1 }));
+        ban.roles = b.roles.map((r, i) => ({ id: r.id || uid(), label: r.label, hasDeadline: r.hasDeadline, hasStatus: !!r.hasStatus, hasLink: !!r.hasLink, sort: i + 1 }));
         db.tasks.forEach((t) => { t.parts = t.parts.filter((p) => !removedRoleIds.includes(p.roleId)); });
       },
       async deleteBan(id) {
