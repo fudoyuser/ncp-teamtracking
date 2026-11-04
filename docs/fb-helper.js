@@ -147,12 +147,28 @@ window.fbHelper = function fbHelper(site, opts) {
   }
 
   var findScroller = function (el) {
-    var best = null;
+    var candidates = [];
     var nodes = [el].concat(Array.prototype.slice.call(el.querySelectorAll('*')));
     nodes.forEach(function (n) {
       var s = getComputedStyle(n);
-      if (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight + 20 && (!best || n.scrollHeight > best.scrollHeight)) best = n;
+      if (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight + 20) {
+        candidates.push(n);
+      }
     });
+    if (!candidates.length) return null;
+    // Ưu tiên scroller chứa nhiều a[href] (danh sách tên) nhất
+    var best = null, bestLinks = -1;
+    candidates.forEach(function (c) {
+      var links = c.querySelectorAll('a[href]').length;
+      if (links > bestLinks) { bestLinks = links; best = c; }
+    });
+    // Nếu không có a[href] nào, lấy scroller nhỏ nhất (innermost)
+    if (bestLinks === 0) {
+      best = candidates[0];
+      candidates.forEach(function (c) {
+        if (c.scrollHeight < best.scrollHeight) best = c;
+      });
+    }
     return best;
   };
   var cleanUrl = function (h) {
@@ -185,42 +201,27 @@ window.fbHelper = function fbHelper(site, opts) {
   // Người trong khung danh sách (cảm xúc / chia sẻ)
   var collectList = function (el) {
     var out = {};
-    // 1) Cách chính: a[href] có tên hợp lệ
-    el.querySelectorAll('a[href]').forEach(function (a) {
+    // Tìm scroller bên trong (nếu có) để giới hạn phạm vi thu thập
+    var scope = findScroller(el) || el;
+    // 1) Cách chính: a[href] có tên hợp lệ — chỉ tìm trong phần cuộn
+    scope.querySelectorAll('a[href]').forEach(function (a) {
       if (!goodLink(a)) return;
       var t = textOf(a);
       if (!(t in out) || !out[t]) out[t] = cleanUrl(a.getAttribute('href'));
     });
-    // 2) Fallback: Facebook đôi khi dùng span/div chứa tên trong các hàng danh sách
-    //    Tìm các hàng có link profile + tên hiển thị riêng
+    // 2) Fallback: tìm a[href] trỏ đến trang cá nhân, lấy tên từ text bên trong link đó
     if (Object.keys(out).length === 0) {
-      // Tìm trong các hàng chứa link profile (a[href*="/profile"] hoặc a[href^="/"])
-      el.querySelectorAll('a[href]').forEach(function (a) {
+      scope.querySelectorAll('a[href]').forEach(function (a) {
         var href = a.getAttribute('href') || '';
-        if (!/^\/(profile\.php|[a-zA-Z0-9.]+)\/?(\?|$)/.test(href) && !/facebook\.com\/(profile\.php|[a-zA-Z0-9.]+)\/?(\?|$)/.test(href)) return;
-        // Tìm tên trong row chứa link này
-        var row = a.closest('[class]');
-        if (!row) return;
-        var spans = row.querySelectorAll('span');
-        spans.forEach(function (sp) {
-          var t = textOf(sp);
-          if (t && t.length >= 2 && t.length <= 60 && !JUNK.test(t) && !/^\d/.test(t)) {
-            if (!(t in out) || !out[t]) out[t] = cleanUrl(href);
-          }
-        });
-      });
-    }
-    // 3) Fallback cuối: tìm aria-label trên các hàng trong danh sách
-    if (Object.keys(out).length === 0) {
-      el.querySelectorAll('[aria-label]').forEach(function (n) {
-        var label = (n.getAttribute('aria-label') || '').trim();
-        // Bỏ qua aria-label quá dài, quá ngắn, hoặc là tên nút
-        if (!label || label.length < 2 || label.length > 60 || JUNK.test(label)) return;
-        if (/đóng|close|tất cả|all|tab|nút|button/i.test(label)) return;
-        // Tìm link profile gần nhất
-        var link = n.querySelector('a[href]') || (n.closest('a[href]'));
-        var url = link ? cleanUrl(link.getAttribute('href')) : '';
-        if (!(label in out)) out[label] = url;
+        // Chỉ lấy link profile (không phải link bài viết, group, page...)
+        if (/\/(groups|pages|events|hashtag|photo|photos|watch|reel|stories|posts|videos|share)\b/.test(href)) return;
+        if (!/^\/?[a-zA-Z0-9.]+\/?$/.test(href.replace(/^https?:\/\/[^/]+/, '').split('?')[0]) &&
+            !/profile\.php/.test(href)) return;
+        // Lấy tên = text đầu tiên trong link hoặc span con trực tiếp
+        var t = textOf(a);
+        if (t && t.length >= 2 && t.length <= 60 && !JUNK.test(t) && !/^\d/.test(t)) {
+          if (!(t in out) || !out[t]) out[t] = cleanUrl(href);
+        }
       });
     }
     return out;
@@ -228,18 +229,19 @@ window.fbHelper = function fbHelper(site, opts) {
   var toArr = function (o) { return Object.keys(o).map(function (k) { return { name: k, url: o[k] }; }); };
 
   var scrollList = async function (d, label) {
-    var stable = 0, last = -1, noScroller = 0;
+    var stable = 0, last = -1, noScroller = 0, cachedSc = null;
     // Đợi nội dung dialog load (Facebook lazy-load danh sách cảm xúc)
-    await sleep(1500);
+    await sleep(2000);
     for (var i = 0; i < 400 && !stop; i++) {
-      var sc = findScroller(d);
+      // Tìm scroller — khi đã tìm thấy, dùng lại nếu vẫn còn trong DOM
+      var sc = (cachedSc && document.contains(cachedSc)) ? cachedSc : findScroller(d);
       if (sc) {
+        cachedSc = sc;
         sc.scrollTop = sc.scrollHeight;
         noScroller = 0;
       } else {
-        // Không tìm thấy scroller – chờ thêm vài lần thay vì break ngay
         noScroller++;
-        if (noScroller >= 8) break; // chỉ break sau 8 lần liên tiếp (~16s)
+        if (noScroller >= 8) break;
       }
       await sleep(1100 + Math.random() * 900);
       var n = Object.keys(collectList(d)).length;
