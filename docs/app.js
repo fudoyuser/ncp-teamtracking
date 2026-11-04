@@ -716,14 +716,15 @@
     if (!me().isAdmin) return toast('Chỉ admin mới cập nhật được tên Facebook của thành viên.', 'error');
     const rows = p.items.map((x) => ({ x, m: memberById(x.id) })).filter((r) => r.m);
     const okCount = rows.filter((r) => r.x.name).length;
+    const canSave = (r) => !!(r.x.name || (r.x.url && normFb(r.x.url) && normFb(r.x.url) !== normFb(r.m.fbUrl)));
     openModal(`<form id="batch-form" class="wide">${modalHead('ⓕ Kết quả đọc Facebook', `đọc được ${okCount}/${rows.length} người`)}
       <div class="m-body">
-        <p class="small">Kiểm tra nhanh rồi bấm <b>Lưu tất cả</b>. Bỏ tick những dòng thấy sai. Người không đọc được tên giữ nguyên thông tin cũ – có thể làm lại từng người bằng nút <b>Mở ↗</b>.</p>
+        <p class="small">Dòng chỉ đọc được link (không đọc được tên) vẫn được lưu link trang cá nhân thật, giữ tên cũ. Kiểm tra nhanh rồi bấm <b>Lưu tất cả</b>. Bỏ tick những dòng thấy sai. Người không đọc được tên giữ nguyên thông tin cũ – có thể làm lại từng người bằng nút <b>Mở ↗</b>.</p>
         <div class="table-wrap"><table class="mini"><thead><tr><th></th><th>Thành viên</th><th>Tên Facebook</th><th>Link trang cá nhân</th></tr></thead><tbody>
-        ${rows.map((r, i) => `<tr><td><input type="checkbox" name="row" value="${i}" ${r.x.name ? 'checked' : 'disabled'} aria-label="Lưu dòng này"></td>
+        ${rows.map((r, i) => `<tr><td><input type="checkbox" name="row" value="${i}" ${canSave(r) ? 'checked' : 'disabled'} aria-label="Lưu dòng này"></td>
           <td>${esc(r.m.name)}</td>
           <td>${r.x.name ? `<b>${esc(r.x.name)}</b>${r.m.fbName && r.m.fbName !== r.x.name ? `<div class="muted small">cũ: ${esc(r.m.fbName)}</div>` : ''}` : `<span class="badge danger">Không đọc được</span>${r.x.why ? `<div class="muted small">${esc(r.x.why)}</div>` : ''}`}</td>
-          <td class="small">${r.x.name && r.x.url ? `<a href="${esc(r.x.url)}" target="_blank" rel="noopener">${esc(r.x.url.replace(/^https?:\/\/(www\.)?/, ''))}</a>` : '<span class="muted">giữ link cũ</span>'}</td></tr>`).join('')}
+          <td class="small">${canSave(r) && r.x.url ? `<a href="${esc(r.x.url)}" target="_blank" rel="noopener">${esc(r.x.url.replace(/^https?:\/\/(www\.)?/, ''))}</a>` : '<span class="muted">giữ link cũ</span>'}</td></tr>`).join('')}
         </tbody></table></div></div>
       <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="batch-btn">Lưu tất cả</button></div></footer></form>`);
     $('#batch-form').addEventListener('submit', async (ev) => {
@@ -732,8 +733,9 @@
       await run(async () => {
         for (const r of pick) {
           const url = r.x.url || r.m.fbUrl;
-          await S.setMemberFacebook(r.m.id, r.x.name, url);
-          Object.assign(r.m, { fbName: r.x.name, fbUrl: url });
+          const name = r.x.name || r.m.fbName;
+          await S.setMemberFacebook(r.m.id, name, url);
+          Object.assign(r.m, { fbName: name, fbUrl: url });
         }
         toast(`Đã cập nhật Facebook cho ${pick.length} người.`);
         renderMain(); openFbUpdateList();

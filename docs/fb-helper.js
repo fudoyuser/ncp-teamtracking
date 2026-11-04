@@ -32,12 +32,20 @@ window.fbHelper = function fbHelper(site) {
           return seg && seg !== 'share' && seg !== 'login' ? 'https://www.facebook.com/' + seg : '';
         } catch (e) { return ''; }
       };
-      var pickH1 = function (d) {
-        var hs = Array.prototype.map.call(d.querySelectorAll('h1'), function (h) { return (h.innerText || h.textContent || '').trim().split('\n')[0].trim(); });
-        return hs.filter(function (t) { return t && !BAD.test(t) && !/^(thông báo|notifications|bảng feed|feeds?|trang chủ|home)$/i.test(t); })[0] || '';
+      var JUNKH = /^(thông báo|notifications|bảng feed|feeds?|trang chủ|home|đoạn chat|chats?|tin nhắn|messages?|messenger|bạn bè|friends|menu|marketplace|video|watch|nhóm|groups|trang|pages|kỷ niệm|memories|đã lưu|saved|cài đặt|settings|tìm kiếm|search|facebook)$/i;
+      var okName = function (t) { return !!t && t.length <= 70 && !BAD.test(t) && !JUNKH.test(t); };
+      var cleanTitle = function (t) { return String(t || '').replace(/^\(\d+\+?\)\s*/, '').replace(/\s*[|\-–]\s*Facebook\s*$/i, '').trim(); };
+      var pickName = function (d) {
+        // 1) Tiêu đề tab: Facebook đặt thành "Tên | Facebook" khi trang cá nhân hiện xong
+        var t = cleanTitle(d.title);
+        if (okName(t)) return t;
+        // 2) Thẻ h1 trong vùng nội dung chính
+        var scope = d.querySelector('[role="main"]') || d;
+        var hs = Array.prototype.map.call(scope.querySelectorAll('h1'), function (h) { return (h.innerText || h.textContent || '').trim().split('\n')[0].trim(); });
+        return hs.filter(okName)[0] || '';
       };
       // Mở 1 cửa sổ nhỏ (ngay lúc bấm nút nên không bị chặn popup), rồi lần lượt chuyển cửa sổ đó tới từng trang cá nhân
-      var win = window.open('about:blank', 'pccv-reader', 'width=520,height=640,left=40,top=40');
+      var win = window.open('about:blank', 'pccv-reader', 'width=1200,height=820,left=20,top=20');
       (async function () {
         var out = [];
         var prev = 'about:blank';
@@ -55,10 +63,12 @@ window.fbHelper = function fbHelper(site) {
                 try { d = win.document; } catch (e) { why = 'không truy cập được cửa sổ'; break; }
                 if (!d || !d.location || d.location.href === prev || d.location.href === 'about:blank') continue;
                 if (/\/login|checkpoint/.test(d.location.pathname)) { why = 'Facebook yêu cầu đăng nhập/xác minh'; break; }
-                var h = pickH1(d);
-                if (h) { name = h; url = cleanProfile(d.location.href); prev = d.location.href; break; }
+                url = cleanProfile(d.location.href) || url;
+                var h = pickName(d);
+                if (h) { name = h; prev = d.location.href; break; }
               }
-              if (!name && !why) why = 'trang không hiện tên sau 20 giây';
+              if (!name && !why) why = 'trang không hiện tên sau 20 giây (tiêu đề: "' + (function () { try { return win.document.title; } catch (e) { return '?'; } })() + '")';
+              try { prev = win.location.href; } catch (e) { /* bỏ qua */ }
             } catch (e) { why = 'lỗi cửa sổ: ' + e.message; }
           } else { why = 'cửa sổ phụ bị chặn – hãy cho phép cửa sổ bật lên (popup) cho facebook.com'; }
           if (!name) {
@@ -68,11 +78,12 @@ window.fbHelper = function fbHelper(site) {
               var doc = new DOMParser().parseFromString(await r.text(), 'text/html');
               var og = doc.querySelector('meta[property="og:title"]');
               var nm = ((og && og.getAttribute('content')) || doc.title || '').replace(/^\(\d+\+?\)\s*/, '').replace(/\s*[|\-–]\s*Facebook\s*$/i, '').trim();
-              if (nm && !BAD.test(nm)) { name = nm; url = cleanProfile(r.url); why = ''; }
+              if (okName(nm)) { name = nm; url = url || cleanProfile(r.url); why = ''; }
               else if (!why) why = 'tiêu đề trang: "' + (doc.title || '') + '"';
             } catch (e) { if (!why) why = 'không tải được trang'; }
           }
           out.push({ id: it.id, name: name, url: url, why: name ? '' : why });
+          msg('Đang đọc ' + (i + 1) + '/' + list.length + '… ' + (name ? '✓ ' + name : '✗'));
           await sleep(1200 + Math.random() * 1200);
         }
         try { if (win && !win.closed) win.close(); } catch (e) { /* bỏ qua */ }
