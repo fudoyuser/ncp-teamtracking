@@ -266,9 +266,18 @@ function runDaily() {
   checkProps_();
   safe_('Lưu địa chỉ gửi', () => setSetting_('sender_email', senderEmail_()));
   safe_('Kiểm tra email trả lời', checkReplies_);
+  if (mailPaused_()) { console.log('Admin đang TẠM HOÃN gửi mail tự động – bỏ qua nhắc việc hôm nay.'); return; }
   safe_('Gửi lại email xác nhận', processConfirmations_);
   safe_('Gửi nhắc việc', sendReminders_);
   if (Number(Utilities.formatDate(new Date(), tz_(), 'u')) === CONFIG.LEAD_SUMMARY_WEEKDAY) safe_('Tổng hợp tuần', sendLeadSummaries_);
+}
+
+/** Admin bật "Tạm hoãn gửi mail tự động" trên Dashboard (Quản trị → Cài đặt). */
+function mailPaused_() {
+  const st = indexBy_(db_.select('settings', 'key=in.(mail_paused,mail_paused_until)&select=*'), 'key');
+  if (!st.mail_paused || st.mail_paused.value !== true) return false;
+  const until = st.mail_paused_until ? str_(st.mail_paused_until.value) : '';
+  return !until || todayIso_() <= until;
 }
 
 function checkReplies_() {

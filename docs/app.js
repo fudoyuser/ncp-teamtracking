@@ -75,6 +75,17 @@
     if (!c.sends) return 'chua_gui';
     return c.clicked ? 'da_bam' : 'da_gui';
   };
+  const mailPaused = () => {
+    const s = D().settings;
+    return s.mail_paused === true && (!s.mail_paused_until || todayIso() <= s.mail_paused_until);
+  };
+  const pauseBanner = () => {
+    if (!me().isAdmin || !mailPaused()) return '';
+    const until = D().settings.mail_paused_until;
+    return `<div class="banner warn-banner"><div><b>⏸ Đang tạm hoãn gửi mail tự động</b><br>
+      <span class="small">${until ? `Đến hết ngày ${fmtDate(until, true)}, sau đó tự chạy lại.` : 'Đến khi admin bật lại.'} Nhắc việc, tổng hợp tuần và email xác nhận gửi lại đều tạm dừng.</span></div>
+      <button class="btn primary small" data-act="resume-mail">▶ Bật lại ngay</button></div>`;
+  };
   const eventsSorted = () => [...D().events].sort((a, b) => (b.date || '0').localeCompare(a.date || '0') || a.name.localeCompare(b.name, 'vi'));
 
   /* ============================== đăng nhập ============================== */
@@ -524,7 +535,7 @@
     const memberRows = Object.values(mrows).sort((a, b) => b.late - a.late || b.open - a.open || a.m.name.localeCompare(b.m.name, 'vi'));
     const maxOpen = Math.max(1, ...memberRows.map((r) => r.open));
 
-    return `<div class="page-head row"><div><h2>Dashboard</h2><p class="muted">Số liệu hoàn thành tính trong <b>${rangeText}</b>.</p></div></div>
+    return `${pauseBanner()}<div class="page-head row"><div><h2>Dashboard</h2><p class="muted">Số liệu hoàn thành tính trong <b>${rangeText}</b>.</p></div></div>
       <div class="filters">
         <select data-dash="ban" aria-label="Ban"><option value="">Tất cả các Ban</option>${D().bans.map((b) => `<option value="${esc(b.id)}" ${f.ban === b.id ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select>
         <select data-dash="range" aria-label="Khoảng thời gian">${[['30', '30 ngày qua'], ['90', '90 ngày qua'], ['180', '6 tháng qua'], ['all', 'Toàn bộ']].map(([v, l]) => `<option value="${v}" ${f.range === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
@@ -611,7 +622,7 @@
     const tabs = [['accounts', '👥 Tài khoản'], ['bans', '🗂️ Ban & vai trò'], ['events', '📅 Sự kiện'], ['settings', '⚙️ Cài đặt']];
     const t = state.adminTab;
     const body = t === 'bans' ? adminBans() : t === 'events' ? adminEvents() : t === 'settings' ? adminSettings() : adminAccounts();
-    return `<div class="subtabs">${tabs.map(([id, l]) => `<button class="subtab ${id === t ? 'active' : ''}" data-act="admin-tab" data-tab="${id}">${l}</button>`).join('')}</div>${body}`;
+    return `${pauseBanner()}<div class="subtabs">${tabs.map(([id, l]) => `<button class="subtab ${id === t ? 'active' : ''}" data-act="admin-tab" data-tab="${id}">${l}</button>`).join('')}</div>${body}`;
   }
 
   const CONFIRM = {
@@ -789,6 +800,12 @@
         <p class="muted small">Mỗi sáng (8–9h) hệ thống gửi <b>một email tổng hợp</b> cho từng người. Mỗi mốc chỉ nhắc 1 lần; đổi deadline thì nhắc lại theo deadline mới.
           Trưởng ban nhận thêm bản tổng hợp tuần vào thứ Hai.</p>
         <p class="small">Địa chỉ gửi mail: <b>${esc(s.sender_email || '(chưa cài Apps Script)')}</b></p>
+        <fieldset class="pause-box"><legend>Tạm hoãn gửi mail tự động</legend>
+          <p class="small">Trạng thái: ${mailPaused() ? '<span class="badge warn">⏸ Đang tạm hoãn</span>' : '<span class="badge ok">▶ Đang gửi bình thường</span>'}</p>
+          <label class="check"><input type="checkbox" name="mail_paused" ${s.mail_paused === true ? 'checked' : ''}> Tạm hoãn nhắc việc, tổng hợp tuần và email xác nhận gửi lại</label>
+          <label>Hoãn đến hết ngày <span class="muted small">(để trống = hoãn đến khi bật lại)</span><input name="mail_paused_until" type="date" value="${esc(s.mail_paused_until || '')}"></label>
+          <p class="muted small">Email admin tự bấm gửi (cấp đăng nhập, đặt lại mật khẩu) vẫn gửi bình thường. Khi bật lại, các việc vẫn còn trong khoảng nhắc sẽ được nhắc vào sáng hôm sau.</p>
+        </fieldset>
         <div><button class="btn primary" id="settings-btn">Lưu cài đặt</button></div>
       </form>`;
   }
@@ -941,6 +958,9 @@
         ${ok.length ? `<button class="btn small" data-act="copy-pw" data-text="${esc(all)}">📋 Sao chép toàn bộ danh sách</button>` : ''}</div>
         <footer class="m-foot"><span></span><button class="btn primary" data-act="close">Xong</button></footer></div>`);
     },
+    'resume-mail': async (el) => {
+      await run(async () => { await S.saveSettings({ mail_paused: false, mail_paused_until: '' }); await refreshQuiet(); renderMain(); toast('▶ Đã bật lại gửi mail tự động.'); }, el);
+    },
     'resend-all': async (el) => {
       if (!confirm('Gửi lại email xác nhận cho tất cả người chưa xác nhận?')) return;
       await run(async () => { const r = await S.resendConfirm(); await refreshQuiet(); renderMain(); toast(`Đã gửi ${r.sent} email.`); }, el);
@@ -1018,8 +1038,10 @@
     ev.preventDefault();
     const f = ev.target;
     await run(async () => {
-      await S.saveSettings({ reminder_days: Number(f.reminder_days.value), overdue_max_days: Number(f.overdue_max_days.value) });
-      await refreshQuiet(); toast('Đã lưu cài đặt.');
+      const paused = f.mail_paused.checked;
+      await S.saveSettings({ reminder_days: Number(f.reminder_days.value), overdue_max_days: Number(f.overdue_max_days.value),
+        mail_paused: paused, mail_paused_until: paused ? f.mail_paused_until.value || '' : '' });
+      await refreshQuiet(); renderMain(); toast(paused ? '⏸ Đã tạm hoãn gửi mail tự động.' : 'Đã lưu cài đặt.');
     }, $('#settings-btn'));
   });
 

@@ -237,3 +237,8 @@ dialog form, dialog > div { display: flex; flex-direction: column; max-height: c
 .settings label { display: flex; flex-direction: column; gap: 4px; font-weight: 500; }
 .settings input { max-width: 120px; }
 .card .table-wrap table.mini { min-width: 480px; }
+
+.warn-banner { background: var(--warn-weak); border-color: var(--warn); }
+.pause-box { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; display: grid; gap: 10px; }
+.pause-box legend { font-weight: 600; padding: 0 4px; }
+.pause-box input[type=date] { max-width: 180px; }
