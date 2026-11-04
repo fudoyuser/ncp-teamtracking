@@ -22,7 +22,7 @@ window.fbHelper = function fbHelper(site, opts) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v7</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v8</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -348,6 +348,44 @@ window.fbHelper = function fbHelper(site, opts) {
   var post = location.href.split('#')[0];
   var LBL = { like: 'Cảm xúc', comment: 'Bình luận', share: 'Chia sẻ' };
 
+  // Mã bài viết lấy từ URL (pfbid…, /posts/123, story_fbid=…)
+  var postIdOf = function (u) {
+    var m = String(u || '').match(/(pfbid[0-9A-Za-z]+)|\/posts\/(\d+)|story_fbid=(\d+)|\/permalink\/(\d+)|[?&]fbid=(\d+)|\/videos\/(\d+)|\/reel\/(\d+)/);
+    return m ? m.slice(1).filter(Boolean)[0] : '';
+  };
+  var POSTHEAD = /bài viết|'s post|\bpost\b/i;
+  var rootName = function (r) {
+    if (!r || r === document) return '(cả trang)';
+    var h = headOf(r).trim();
+    return h ? h.slice(0, 60) : (r.getAttribute('role') === 'main' ? '(vùng chính của trang)' : '(khối bài viết)');
+  };
+  // Tìm đúng bài viết cần quét. Đợi tối đa ~12s vì khung bài viết thường hiện SAU bảng feed.
+  var findPostRoot = async function () {
+    var pid = postIdOf(location.href);
+    for (var t = 0; t < 24; t++) {
+      // 1) Khung bài viết ("Bài viết của …") đè lên feed
+      var pd = visibleDialogs().filter(function (d) { return !listKindOf(d) && POSTHEAD.test(headOf(d)); });
+      if (pd.length) return pd[pd.length - 1];
+      // 2) Link mang mã bài viết (thời gian đăng) → leo lên khối chứa nút cảm xúc
+      if (pid) {
+        var as = Array.prototype.filter.call(document.querySelectorAll('a[href*="' + pid + '"]'), function (a) { return a.getClientRects().length && !a.closest('[role="article"][aria-label]'); });
+        for (var i = 0; i < as.length; i++) {
+          var dd = as[i].closest('[role="dialog"]');
+          if (dd && !listKindOf(dd)) return dd;
+          var up = as[i].parentElement;
+          for (var lv = 0; lv < 30 && up && up !== document.body; lv++, up = up.parentElement) {
+            if (up.getAttribute('role') === 'main') break;
+            if (findTriggers(up, 'like').length) return up;
+          }
+        }
+      }
+      await sleep(500);
+    }
+    // 3) Không xác định được: chỉ có 1 khung không phải danh sách → dùng nó, còn không thì vùng chính
+    var other = visibleDialogs().filter(function (d) { return !listKindOf(d); });
+    return other.length ? other[other.length - 1] : (document.querySelector('[role="main"]') || document);
+  };
+
   (async function () {
     if (listKind) {
       // Đang mở sẵn 1 khung cảm xúc / chia sẻ → chỉ lấy khung đó
@@ -355,41 +393,19 @@ window.fbHelper = function fbHelper(site, opts) {
       finish({ kind: listKind, post: post, names: one }, 'Xong! ' + LBL[listKind] + ': ' + one.length + ' tên.');
       return;
     }
-    // Chế độ ĐẦY ĐỦ: bình luận + cảm xúc + chia sẻ của bài viết đang mở
+    // Chế độ ĐẦY ĐỦ: bình luận + cảm xúc của ĐÚNG bài viết đang mở
     var lists = {}, missing = {};
+    msg('Đang tìm đúng bài viết…');
+    postRoot = await findPostRoot();
+    msg('Bài viết: ' + rootName(postRoot));
+    await sleep(800);
     lists.comment = toArr(await expandComments(postRoot));
-    // Cuộn về đầu bài viết trước khi quét cảm xúc (expandComments đã cuộn xuống dưới)
-    // Cuộn đến chính postRoot thay vì đầu trang (tránh nhầm bài viết khác phía trên)
-    if (postRoot && postRoot.scrollIntoView) {
-      postRoot.scrollIntoView({ block: 'start', behavior: 'instant' });
-    } else {
-      window.scrollTo(0, 0);
-    }
+    // expandComments đã cuộn xuống dưới → cuộn lại lên đầu bài (trong khung nếu có)
+    var sc0 = postRoot !== document && findScroller(postRoot);
+    if (sc0) sc0.scrollTop = 0;
+    if (postRoot.scrollIntoView) postRoot.scrollIntoView({ block: 'start', behavior: 'instant' });
     await sleep(1500);
-    // Tìm đúng bài viết chính để quét cảm xúc
-    // Ưu tiên: postRoot gốc (nếu là dialog thì chính xác nhất)
-    // Nếu postRoot là [role="main"], tìm article đầu tiên của bài viết (không phải bình luận)
     var reactRoot = postRoot;
-    if (postRoot === document || (postRoot && !postRoot.closest('[role="dialog"]'))) {
-      // Tìm article chính của bài viết (không phải comment)
-      var articles = Array.prototype.filter.call(
-        (postRoot || document).querySelectorAll('[role="article"]'),
-        function (art) {
-          var label = (art.getAttribute('aria-label') || '').toLowerCase();
-          // Bỏ qua các article là bình luận
-          return !/^(bình luận|phản hồi|trả lời|comment|reply)\s/i.test(label);
-        }
-      );
-      // Lấy article đầu tiên (bài viết chính)
-      if (articles.length) {
-        // Article có thể lồng nhau — lấy cái ngoài cùng (chứa cả nội dung + thanh cảm xúc)
-        reactRoot = articles[0];
-        // Nhưng nút cảm xúc thường nằm NGOÀI article, trong parent container
-        // → mở rộng lên 1-2 cấp cha để bao gồm thanh reaction
-        var parent = reactRoot.parentElement;
-        if (parent) reactRoot = parent;
-      }
-    }
     for (var k of ['like']) { // share: thành viên tự nộp link, không quét
       if (stop) break;
       msg(LBL[k] + ': đang mở danh sách…');
