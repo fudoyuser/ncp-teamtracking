@@ -545,7 +545,7 @@
 
   function openSeedForm(c) {
     const creating = !c;
-    c = c || { title: '', postUrl: '', actions: ['like', 'comment', 'share'], deadline: '', memberIds: [] };
+    c = c || { title: '', postUrl: '', actions: ['like', 'comment'], deadline: '', memberIds: [] };
     const groups = D().bans.map((b) => ({ b, ms: activeMembers().filter((m) => m.bans.some((x) => x.banId === b.id)) }));
     const noBan = activeMembers().filter((m) => !m.bans.length);
     const box = (m) => `<label class="check small"><input type="checkbox" name="mem" value="${esc(m.id)}" ${c.memberIds.includes(m.id) ? 'checked' : ''}> ${esc(m.name)}</label>`;
