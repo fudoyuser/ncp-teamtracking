@@ -262,3 +262,6 @@ dialog:has(.wide) { width: min(900px, calc(100vw - 32px)); }
 .bm-box summary { cursor: pointer; }
 .bm-box ol { margin: 10px 0 6px; padding-left: 20px; display: grid; gap: 6px; }
 .bm-link { cursor: grab; }
+
+.fb-edit input { width: 100%; min-width: 150px; font-size: 13px; padding: 5px 8px; }
+.fb-edit td { vertical-align: middle; }

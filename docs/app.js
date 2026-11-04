@@ -693,9 +693,14 @@
         <ol class="small"><li>Bấm <b>Mở ↗</b> ở một người → trang Facebook của họ mở ở tab mới.</li>
           <li>Trên trang đó, bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang → <b>Lưu tên này vào PCCV</b>.</li>
           <li>Tab PCCV hiện khung xác nhận (đã chọn sẵn đúng người) → <b>Lưu</b>. Làm tiếp người kế tiếp.</li></ol>
-        <div class="table-wrap"><table class="mini"><thead><tr><th>Thành viên</th><th>Tên Facebook</th><th>Trạng thái</th><th></th></tr></thead><tbody>
-        ${list.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.fbName || '—')}</td><td>${fbStatus(m)}</td>
-          <td>${m.fbUrl ? `<a class="btn small" href="${esc(m.fbUrl)}" target="_blank" rel="noopener" data-fb-target="${esc(m.id)}">Mở ↗</a>` : ''}</td></tr>`).join('')}
+        <p class="small"><b>Hoặc gõ tay:</b> bấm <b>Mở ↗</b> để xem tên trên Facebook, gõ vào ô <b>Tên Facebook</b> rồi bấm <b>Lưu</b> (hoặc Enter).</p>
+        <div class="table-wrap"><table class="mini fb-edit"><thead><tr><th>Thành viên</th><th>Tên Facebook</th><th>Link trang cá nhân</th><th>Trạng thái</th><th></th></tr></thead><tbody>
+        ${list.map((m) => `<tr data-fb-row="${esc(m.id)}"><td>${esc(m.name)}</td>
+          <td><input name="fbName" value="${esc(m.fbName || '')}" placeholder="Tên hiển thị trên Facebook" aria-label="Tên Facebook của ${esc(m.name)}"></td>
+          <td><input name="fbUrl" value="${esc(m.fbUrl || '')}" placeholder="https://www.facebook.com/…" aria-label="Link Facebook của ${esc(m.name)}"></td>
+          <td>${fbStatus(m)}</td>
+          <td class="row-actions"><button type="button" class="btn small primary" data-act="fb-row-save" data-id="${esc(m.id)}">Lưu</button>
+            ${m.fbUrl ? `<a class="btn small" href="${esc(m.fbUrl)}" target="_blank" rel="noopener" data-fb-target="${esc(m.id)}">Mở ↗</a>` : ''}</td></tr>`).join('')}
         </tbody></table></div></div>
       <footer class="m-foot"><span></span><button class="btn primary" data-act="close">Đóng</button></footer></div>`);
   }
@@ -1303,6 +1308,19 @@
     'my-fb': () => openMyFb(),
     'fb-update': () => openFbUpdateList(),
     'fb-batch': () => startFbBatch(),
+    'fb-row-save': async (el) => {
+      const row = el.closest('[data-fb-row]');
+      const m = memberById(el.dataset.id);
+      const name = row.querySelector('[name=fbName]').value.trim();
+      const url = row.querySelector('[name=fbUrl]').value.trim();
+      if (url && !/^https?:\/\/(www\.|m\.|web\.)?(facebook\.com|fb\.com)\//i.test(url)) return toast('Link phải là trang Facebook (https://www.facebook.com/…)', 'error');
+      await run(async () => {
+        await S.setMemberFacebook(m.id, name, url);
+        Object.assign(m, { fbName: name, fbUrl: url });
+        row.querySelector('td:nth-child(4)').innerHTML = fbStatus(m);
+        toast(`Đã lưu Facebook cho ${m.name}.`);
+      }, el);
+    },
     'seed-new': () => openSeedForm(null),
     'seed-detail': (el) => openSeedDetail(D().campaigns.find((c) => c.id === el.dataset.id)),
     'seed-edit': (el) => openSeedForm(D().campaigns.find((c) => c.id === el.dataset.id)),
@@ -1401,6 +1419,12 @@
       renderMain();
       const n = $('[data-acct-q]'); n.focus(); n.setSelectionRange(pos, pos);
     }
+  });
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter') return;
+    const row = ev.target.closest && ev.target.closest('[data-fb-row]');
+    if (row) { ev.preventDefault(); row.querySelector('[data-act=fb-row-save]').click(); }
   });
 
   document.addEventListener('submit', async (ev) => {
