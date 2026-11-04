@@ -648,6 +648,7 @@
   const fbIds = (u) => (String(u || '').match(/\d{6,}|pfbid\w+/g) || []);
   function openSeedImport(p) {
     if (p.kind === 'profile') return openProfileImport(p);
+    if (p.kind === 'profiles') return openProfilesBatch(p);
     if (!canSeed()) return toast('Chỉ admin hoặc trưởng ban mới đối chiếu được seeding.', 'error');
     const list = D().campaigns || [];
     if (!list.length) return toast('Chưa có đợt seeding nào – hãy tạo đợt trước rồi bấm lại nút trên Facebook.', 'error');
@@ -682,6 +683,11 @@
     const done = list.filter((m) => isRealFbUrl(m.fbUrl) && m.fbName).length;
     openModal(`<div class="wide">${modalHead('ⓕ Cập nhật tên Facebook', `${done}/${list.length} người đã đầy đủ`)}
       <div class="m-body">
+        <div class="hint"><b>⚡ Cách nhanh – cập nhật cả ${list.filter((m) => m.fbUrl).length} người một lần:</b>
+          <ol class="small"><li>Bấm nút dưới đây → một tab Facebook mở ra.</li><li>Trên tab đó, bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang <b>một lần</b> rồi đợi khoảng 1–2 phút.</li>
+          <li>Bấm <b>"Gửi kết quả về PCCV"</b> → kiểm tra rồi bấm <b>Lưu tất cả</b>.</li></ol>
+          <button type="button" class="btn primary" data-act="fb-batch">⚡ Tự cập nhật tất cả</button></div>
+        <p class="small"><b>Hoặc từng người:</b></p>
         <ol class="small"><li>Bấm <b>Mở ↗</b> ở một người → trang Facebook của họ mở ở tab mới.</li>
           <li>Trên trang đó, bấm nút <b>📣 Gửi sang PCCV</b> trên thanh dấu trang → <b>Lưu tên này vào PCCV</b>.</li>
           <li>Tab PCCV hiện khung xác nhận (đã chọn sẵn đúng người) → <b>Lưu</b>. Làm tiếp người kế tiếp.</li></ol>
@@ -695,6 +701,43 @@
     const a = ev.target.closest('[data-fb-target]');
     if (a) { try { localStorage.setItem(FB_TARGET, JSON.stringify({ id: a.dataset.fbTarget, t: Date.now() })); } catch (e) { /* bỏ qua */ } }
   }, true);
+
+  function startFbBatch() {
+    const items = activeMembers().filter((m) => m.fbUrl).map((m) => ({ id: m.id, url: m.fbUrl }));
+    const data = btoa(unescape(encodeURIComponent(JSON.stringify(items))));
+    const base = S.demo ? 'http://localhost:8766/' : 'https://www.facebook.com/';
+    window.open(base + '#pccv-batch=' + data, '_blank');
+    toast('Trên tab Facebook vừa mở, hãy bấm nút "📣 Gửi sang PCCV" trên thanh dấu trang.');
+  }
+
+  function openProfilesBatch(p) {
+    if (!me().isAdmin) return toast('Chỉ admin mới cập nhật được tên Facebook của thành viên.', 'error');
+    const rows = p.items.map((x) => ({ x, m: memberById(x.id) })).filter((r) => r.m);
+    const okCount = rows.filter((r) => r.x.name).length;
+    openModal(`<form id="batch-form" class="wide">${modalHead('ⓕ Kết quả đọc Facebook', `đọc được ${okCount}/${rows.length} người`)}
+      <div class="m-body">
+        <p class="small">Kiểm tra nhanh rồi bấm <b>Lưu tất cả</b>. Bỏ tick những dòng thấy sai. Người không đọc được tên giữ nguyên thông tin cũ – có thể làm lại từng người bằng nút <b>Mở ↗</b>.</p>
+        <div class="table-wrap"><table class="mini"><thead><tr><th></th><th>Thành viên</th><th>Tên Facebook</th><th>Link trang cá nhân</th></tr></thead><tbody>
+        ${rows.map((r, i) => `<tr><td><input type="checkbox" name="row" value="${i}" ${r.x.name ? 'checked' : 'disabled'} aria-label="Lưu dòng này"></td>
+          <td>${esc(r.m.name)}</td>
+          <td>${r.x.name ? `<b>${esc(r.x.name)}</b>${r.m.fbName && r.m.fbName !== r.x.name ? `<div class="muted small">cũ: ${esc(r.m.fbName)}</div>` : ''}` : '<span class="badge danger">Không đọc được</span>'}</td>
+          <td class="small">${r.x.name && r.x.url ? `<a href="${esc(r.x.url)}" target="_blank" rel="noopener">${esc(r.x.url.replace(/^https?:\/\/(www\.)?/, ''))}</a>` : '<span class="muted">giữ link cũ</span>'}</td></tr>`).join('')}
+        </tbody></table></div></div>
+      <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="batch-btn">Lưu tất cả</button></div></footer></form>`);
+    $('#batch-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const pick = new FormData(ev.target).getAll('row').map(Number).map((i) => rows[i]);
+      await run(async () => {
+        for (const r of pick) {
+          const url = r.x.url || r.m.fbUrl;
+          await S.setMemberFacebook(r.m.id, r.x.name, url);
+          Object.assign(r.m, { fbName: r.x.name, fbUrl: url });
+        }
+        toast(`Đã cập nhật Facebook cho ${pick.length} người.`);
+        renderMain(); openFbUpdateList();
+      }, $('#batch-btn'));
+    });
+  }
 
   function openProfileImport(p) {
     if (!me().isAdmin) return toast('Chỉ admin mới cập nhật được tên Facebook của thành viên.', 'error');
@@ -1255,6 +1298,7 @@
     },
     'my-fb': () => openMyFb(),
     'fb-update': () => openFbUpdateList(),
+    'fb-batch': () => startFbBatch(),
     'seed-new': () => openSeedForm(null),
     'seed-detail': (el) => openSeedDetail(D().campaigns.find((c) => c.id === el.dataset.id)),
     'seed-edit': (el) => openSeedForm(D().campaigns.find((c) => c.id === el.dataset.id)),

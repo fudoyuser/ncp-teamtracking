@@ -18,6 +18,49 @@ window.fbHelper = function fbHelper(site) {
   box.querySelector('[data-stop]').onclick = function () { stop = true; };
   var msg = function (t) { box.querySelector('[data-m]').textContent = t; };
 
+  // Chế độ CẬP NHẬT HÀNG LOẠT: PCCV mở facebook.com kèm #pccv-batch=<danh sách> → đọc lần lượt từng trang cá nhân
+  if (/#pccv-batch=/.test(location.hash)) {
+    var list;
+    try { list = JSON.parse(decodeURIComponent(escape(atob(location.hash.split('#pccv-batch=')[1])))); } catch (e) { list = null; }
+    if (list && list.length) {
+      var BAD = /^(facebook|log in|login|đăng nhập|log into facebook|trang không tồn tại|page not found|nội dung này hiện không hiển thị|this content isn't available.*)$/i;
+      var cleanProfile = function (u) {
+        try {
+          var x = new URL(u);
+          if (/profile\.php/.test(x.pathname)) return x.origin + '/profile.php?id=' + (x.searchParams.get('id') || '');
+          var seg = x.pathname.split('/').filter(Boolean)[0] || '';
+          return seg && seg !== 'share' && seg !== 'login' ? 'https://www.facebook.com/' + seg : '';
+        } catch (e) { return ''; }
+      };
+      (async function () {
+        var out = [];
+        for (var i = 0; i < list.length && !stop; i++) {
+          var it = list[i];
+          msg('Đang đọc ' + (i + 1) + '/' + list.length + '…');
+          var name = '', url = '';
+          try {
+            var r = await fetch(it.url, { credentials: 'include' });
+            var html = await r.text();
+            var doc = new DOMParser().parseFromString(html, 'text/html');
+            var og = doc.querySelector('meta[property="og:title"]');
+            name = ((og && og.getAttribute('content')) || doc.title || '').replace(/^\(\d+\+?\)\s*/, '').replace(/\s*[|\-–]\s*Facebook\s*$/i, '').trim();
+            if (BAD.test(name)) name = '';
+            url = cleanProfile(r.url) || cleanProfile((doc.querySelector('link[rel="canonical"]') || {}).href || '') || '';
+          } catch (e) { /* bỏ qua người này */ }
+          out.push({ id: it.id, name: name, url: url });
+          await sleep(1800 + Math.random() * 1200);
+        }
+        var ok = out.filter(function (x) { return x.name; }).length;
+        msg('Xong: đọc được ' + ok + '/' + out.length + ' người.');
+        var b = box.querySelector('[data-stop]');
+        var d = btoa(unescape(encodeURIComponent(JSON.stringify({ kind: 'profiles', items: out, names: [] }))));
+        b.textContent = '📨 Gửi kết quả về PCCV';
+        b.onclick = function () { window.open(site + '#seed-import=' + d, 'pccv-import'); box.remove(); window.__pccvRunning = false; };
+      })();
+      return;
+    }
+  }
+
   var dialogs = Array.prototype.filter.call(document.querySelectorAll('[role="dialog"]'), function (d) { return d.getClientRects().length > 0; });
   var dlg = dialogs.length ? dialogs[dialogs.length - 1] : null;
   var root = dlg || document;
