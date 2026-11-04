@@ -11,7 +11,7 @@ window.fbHelper = function fbHelper(site) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v4</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v5</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -109,7 +109,10 @@ window.fbHelper = function fbHelper(site) {
 
   // Chế độ TRANG CÁ NHÂN: không có khung danh sách, đường dẫn không phải bài viết → đọc tên + link thật
   var isPost = /\/(posts|permalink|photo|photos|videos|reel|watch|story\.php|groups|share|events)\b|story_fbid|fbid=|pfbid/.test(location.pathname + location.search);
-  if (!dlg && !isPost) {
+  var hasPostSignals = !!document.querySelector('[role="article"][aria-label]') ||
+    Array.prototype.some.call(document.querySelectorAll('[aria-label]'), function (n) { return /^(thích|yêu thích|like|love)\s*:\s*[\d.,]+|^(tất cả cảm xúc|all reactions)/i.test(n.getAttribute('aria-label') || ''); }) ||
+    /\b\d+\s*(lượt chia sẻ|shares?)\b|tất cả cảm xúc|all reactions/i.test((document.querySelector('[role="main"]') || document.body).innerText || '');
+  if (!dlg && !isPost && !hasPostSignals) {
     var JUNK1 = /^(facebook|thông báo|notifications|bảng feed|feeds?|trang chủ|home|đoạn chat|chats?|tin nhắn|messages?|messenger|bạn bè|friends|menu|marketplace|video|watch|nhóm|groups|trang|pages|tìm kiếm|search|đăng nhập|log in)$/i;
     var t1 = String(document.title || '').replace(/^\(\d+\+?\)\s*/, '').replace(/\s*[|\-–]\s*Facebook\s*$/i, '').trim();
     var main1 = document.querySelector('[role="main"]') || document;
@@ -207,24 +210,56 @@ window.fbHelper = function fbHelper(site) {
     }
     return collectComments(el);
   };
-  var findTrigger = function (el, k) {
-    var nodes = Array.prototype.slice.call(el.querySelectorAll('[role="button"],[aria-label],span'));
+  var REACT = /^(thích|yêu thích|thương thương|haha|wow|buồn|phẫn nộ|like|love|care|sad|angry)\s*:\s*[\d.,]+/i;
+  var clickableOf = function (n) { return n.closest('[role="button"],[role="link"],[tabindex]') || n; };
+  // Trả về danh sách chỗ có thể bấm, theo thứ tự ưu tiên
+  var findTriggers = function (el, k) {
+    var nodes = Array.prototype.slice.call(el.querySelectorAll('[aria-label],[role="button"],span,div'));
+    var seen = [], out = [];
+    var add = function (n) { if (!n) return; var c = clickableOf(n); if (seen.indexOf(c) < 0 && !c.closest('[role="article"][aria-label]')) { seen.push(c); out.push(c); } };
     if (k === 'like') {
-      return nodes.filter(function (n) { return /^(tất cả cảm xúc|all reactions|xem ai đã bày tỏ cảm xúc|see who reacted|cảm xúc:|reactions:)/i.test((n.getAttribute('aria-label') || '').trim()); })[0] ||
-        nodes.filter(function (n) { return /^(tất cả cảm xúc|all reactions)/i.test(textOf(n)); })[0] || null;
+      nodes.forEach(function (n) { if (/^(tất cả cảm xúc|all reactions|xem ai đã bày tỏ cảm xúc|see who reacted|cảm xúc\s*:|reactions\s*:)/i.test((n.getAttribute('aria-label') || '').trim())) add(n); });
+      nodes.forEach(function (n) {
+        if (n.children.length === 0 && /^(tất cả cảm xúc|all reactions)\s*:?$/i.test(textOf(n))) {
+          // chữ ẩn "Tất cả cảm xúc:" – chỗ bấm thật là khối chứa con số tổng bên cạnh
+          var box = n.parentElement;
+          for (var up = 0; up < 4 && box; up++, box = box.parentElement) {
+            var btn = box.querySelector('[role="button"]');
+            if (btn && /\d/.test(btn.innerText || '')) { add(btn); break; }
+          }
+          add(n);
+        }
+      });
+      nodes.forEach(function (n) { if (REACT.test((n.getAttribute('aria-label') || '').trim())) add(n); });
+    } else {
+      nodes.forEach(function (n) { if (/^[\d.,]+\s*(k|n|tr|m)?\s*(lượt chia sẻ|chia sẻ|shares?)$/i.test(textOf(n))) add(n); });
     }
-    return nodes.filter(function (n) { return /^[\d.,]+\s*(k|n|tr|m)?\s*(lượt chia sẻ|chia sẻ|shares?)$/i.test(textOf(n)); })[0] || null;
+    return out;
   };
-  var openList = async function (trigger, k) {
-    var before = visibleDialogs();
-    (trigger.closest('[role="button"]') || trigger).click();
-    for (var t = 0; t < 20; t++) {
-      await sleep(400);
-      var now = visibleDialogs().filter(function (d) { return before.indexOf(d) < 0; });
-      var hit = now.filter(function (d) { return listKindOf(d) === k; })[0] || now[0];
-      if (hit) { await sleep(1200); return hit; }
+  var openList = async function (triggers, k) {
+    for (var i = 0; i < triggers.length && i < 4; i++) {
+      var before = visibleDialogs();
+      triggers[i].click();
+      for (var t = 0; t < 15; t++) {
+        await sleep(400);
+        var now = visibleDialogs().filter(function (d) { return before.indexOf(d) < 0; });
+        var hit = now.filter(function (d) { return listKindOf(d) === k; })[0] || now[0];
+        if (hit) {
+          await sleep(1200);
+          if (k === 'like') {
+            // Nếu khung đang lọc 1 loại cảm xúc → chuyển sang tab "Tất cả"
+            var all = Array.prototype.filter.call(hit.querySelectorAll('[role="tab"]'), function (tb) { return /^(tất cả|all)(\s|$|\d)/i.test(textOf(tb)); })[0];
+            if (all && all.getAttribute('aria-selected') !== 'true') { all.click(); await sleep(1200); }
+          }
+          return hit;
+        }
+      }
     }
     return null;
+  };
+  var debugLabels = function (el) {
+    return Array.prototype.map.call(el.querySelectorAll('[aria-label]'), function (n) { return (n.getAttribute('aria-label') || '').trim(); })
+      .filter(function (t) { return /\d/.test(t) && t.length < 60; }).slice(0, 8).join(' | ');
   };
   var closeDialog = async function (d) {
     var b = d.querySelector('[aria-label="Đóng"],[aria-label="Close"]');
@@ -259,10 +294,10 @@ window.fbHelper = function fbHelper(site) {
     for (var k of ['like', 'share']) {
       if (stop) break;
       msg(LBL[k] + ': đang mở danh sách…');
-      var trig = findTrigger(postRoot, k);
-      if (!trig) { missing[k] = 'không thấy nút ' + (k === 'like' ? 'số lượt cảm xúc' : 'số lượt chia sẻ') + ' (có thể bài chưa có ' + LBL[k].toLowerCase() + ')'; continue; }
-      var d = await openList(trig, k);
-      if (!d) { missing[k] = 'bấm vào nhưng không mở được khung danh sách'; continue; }
+      var trigs = findTriggers(postRoot, k);
+      if (!trigs.length) { missing[k] = 'không thấy nút ' + (k === 'like' ? 'số lượt cảm xúc' : 'số lượt chia sẻ') + ' (có thể bài chưa có ' + LBL[k].toLowerCase() + '). Nhãn thấy được: ' + debugLabels(postRoot); continue; }
+      var d = await openList(trigs, k);
+      if (!d) { missing[k] = 'đã thử bấm ' + trigs.length + ' chỗ nhưng không mở được khung danh sách. Nhãn thấy được: ' + debugLabels(postRoot); continue; }
       lists[k] = toArr(await scrollList(d, LBL[k]));
       await closeDialog(d);
       await sleep(800);
