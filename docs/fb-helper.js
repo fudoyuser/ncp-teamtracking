@@ -11,7 +11,7 @@ window.fbHelper = function fbHelper(site) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v2</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v4</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -98,11 +98,14 @@ window.fbHelper = function fbHelper(site) {
     }
   }
 
-  var dialogs = Array.prototype.filter.call(document.querySelectorAll('[role="dialog"]'), function (d) { return d.getClientRects().length > 0; });
+  var visibleDialogs = function () { return Array.prototype.filter.call(document.querySelectorAll('[role="dialog"]'), function (d) { return d.getClientRects().length > 0; }); };
+  var headOf = function (d) { return ((d.getAttribute('aria-label') || '') + ' ' + ((d.querySelector('h1,h2,[role="heading"]') || {}).textContent || '')).toLowerCase(); };
+  var listKindOf = function (d) { var h = headOf(d); return /chia sẻ|share/.test(h) ? 'share' : /cảm xúc|react|lượt thích|likes?\b/.test(h) ? 'like' : ''; };
+  var dialogs = visibleDialogs();
   var dlg = dialogs.length ? dialogs[dialogs.length - 1] : null;
-  var root = dlg || document;
-  var head = dlg ? ((dlg.getAttribute('aria-label') || '') + ' ' + ((dlg.querySelector('h1,h2,[role="heading"]') || {}).textContent || '')).toLowerCase() : '';
-  var kind = /chia sẻ|share/.test(head) ? 'share' : /cảm xúc|react|thích|like/.test(head) ? 'like' : 'comment';
+  var listKind = dlg ? listKindOf(dlg) : '';
+  // Bài viết: nếu Facebook mở bài viết dạng khung thì lấy khung đó, không thì vùng nội dung chính
+  var postRoot = listKind ? null : (dlg || document.querySelector('[role="main"]') || document);
 
   // Chế độ TRANG CÁ NHÂN: không có khung danh sách, đường dẫn không phải bài viết → đọc tên + link thật
   var isPost = /\/(posts|permalink|photo|photos|videos|reel|watch|story\.php|groups|share|events)\b|story_fbid|fbid=|pfbid/.test(location.pathname + location.search);
@@ -145,58 +148,126 @@ window.fbHelper = function fbHelper(site) {
       return u.origin + u.pathname.replace(/\/$/, '');
     } catch (e) { return ''; }
   };
-  var collect = function () {
+  var CMT = /^(?:bình luận (?:của|dưới tên)|phản hồi (?:của|dưới tên)|trả lời của|comment by|reply by)\s+(.+?)(?:\s+(?:vào|lúc|\d|cách đây|a |an ).*)?$/i;
+  var textOf = function (a) { return (a.innerText || a.textContent || '').trim().split('\n')[0].trim(); };
+  var goodLink = function (a) {
+    var t = textOf(a);
+    if (!t || t.length < 2 || t.length > 60 || JUNK.test(t)) return false;
+    return !/\/(groups|pages|events|hashtag|photo|photos|watch|reel|stories|posts|videos)\b|comment_id=|\/ufi\//.test(a.getAttribute('href') || '');
+  };
+  // Người bình luận: chỉ lấy các khối bình luận (aria-label "Bình luận của …"), không lấy tác giả bài viết
+  var collectComments = function (el) {
     var out = {};
-    if (kind === 'comment') {
-      root.querySelectorAll('[role="article"][aria-label]').forEach(function (a) {
-        var m = a.getAttribute('aria-label').match(/^(?:bình luận (?:của|dưới tên)|phản hồi (?:của|dưới tên)|trả lời của|comment by|reply by)\s+(.+?)(?:\s+(?:vào|lúc|\d|cách đây|a |an ).*)?$/i);
-        if (m && !out[m[1].trim()]) out[m[1].trim()] = '';
-      });
-    }
-    root.querySelectorAll('a[href]').forEach(function (a) {
-      var t = (a.innerText || a.textContent || '').trim().split('\n')[0].trim();
-      if (!t || t.length < 2 || t.length > 60 || JUNK.test(t)) return;
-      var h = a.getAttribute('href') || '';
-      if (/\/(groups|pages|events|hashtag|photo|photos|watch|reel|stories|posts|videos)\b|comment_id=|\/ufi\//.test(h)) return;
-      if (kind === 'comment' && !a.closest('[role="article"]')) return;
-      if (!(t in out) || !out[t]) out[t] = cleanUrl(h);
+    el.querySelectorAll('[role="article"][aria-label]').forEach(function (art) {
+      var m = art.getAttribute('aria-label').match(CMT);
+      if (!m) return;
+      var name = m[1].trim();
+      var link = Array.prototype.filter.call(art.querySelectorAll('a[href]'), goodLink).filter(function (a) { return textOf(a) === name; })[0] ||
+        Array.prototype.filter.call(art.querySelectorAll('a[href]'), goodLink)[0];
+      if (!out[name]) out[name] = link ? cleanUrl(link.getAttribute('href')) : '';
     });
     return out;
   };
+  // Người trong khung danh sách (cảm xúc / chia sẻ)
+  var collectList = function (el) {
+    var out = {};
+    el.querySelectorAll('a[href]').forEach(function (a) {
+      if (!goodLink(a)) return;
+      var t = textOf(a);
+      if (!(t in out) || !out[t]) out[t] = cleanUrl(a.getAttribute('href'));
+    });
+    return out;
+  };
+  var toArr = function (o) { return Object.keys(o).map(function (k) { return { name: k, url: o[k] }; }); };
 
-  (async function () {
+  var scrollList = async function (d, label) {
     var stable = 0, last = -1;
     for (var i = 0; i < 400 && !stop; i++) {
-      if (kind === 'comment') {
-        var btns = Array.prototype.filter.call(root.querySelectorAll('[role="button"]'), function (b) {
-          return /^(xem thêm bình luận|xem thêm \d+ bình luận|xem các bình luận trước|xem \d+ phản hồi|xem tất cả \d+ phản hồi|view more comments|view \d+ more comments|view previous comments|view \d+ repl(y|ies)|view all \d+ replies)/i.test((b.innerText || '').trim());
-        });
-        btns.slice(0, 2).forEach(function (b) { b.click(); });
-        window.scrollBy(0, 500);
-      } else {
-        var sc = findScroller(dlg || document.body);
-        if (sc) sc.scrollTop = sc.scrollHeight; else window.scrollTo(0, document.body.scrollHeight);
-      }
+      var sc = findScroller(d);
+      if (sc) sc.scrollTop = sc.scrollHeight; else break;
       await sleep(1100 + Math.random() * 900);
-      var n = Object.keys(collect()).length;
-      msg('Đang tự cuộn… đã thấy ' + n + ' tên');
+      var n = Object.keys(collectList(d)).length;
+      msg(label + ': đang tự cuộn… ' + n + ' tên');
       if (n === last) { if (++stable >= 4) break; } else { stable = 0; last = n; }
     }
-    var all = collect();
-    var names = Object.keys(all).map(function (k) { return { name: k, url: all[k] }; });
-    var data = btoa(unescape(encodeURIComponent(JSON.stringify({ kind: kind, post: location.href.split('#')[0], names: names }))));
-    msg('Xong! Tìm thấy ' + names.length + ' tên (' + (kind === 'like' ? 'cảm xúc' : kind === 'share' ? 'chia sẻ' : 'bình luận') + ').');
+    return collectList(d);
+  };
+  var MORE = /^(xem thêm bình luận|xem thêm \d+ bình luận|xem các bình luận trước|xem \d+ phản hồi|xem tất cả \d+ phản hồi|view more comments|view \d+ more comments|view previous comments|view \d+ repl(y|ies)|view all \d+ replies)/i;
+  var expandComments = async function (el) {
+    var stable = 0, last = -1;
+    for (var i = 0; i < 300 && !stop; i++) {
+      var btns = Array.prototype.filter.call(el.querySelectorAll('[role="button"]'), function (b) { return MORE.test((b.innerText || '').trim()); });
+      btns.slice(0, 2).forEach(function (b) { b.click(); });
+      var sc = el !== document && findScroller(el);
+      if (sc) sc.scrollTop = sc.scrollHeight; else window.scrollBy(0, 500);
+      await sleep(1100 + Math.random() * 900);
+      var n = Object.keys(collectComments(el)).length;
+      msg('Bình luận: đang mở thêm… ' + n + ' người');
+      if (n === last && !btns.length) { if (++stable >= 3) break; } else { stable = 0; last = n; }
+    }
+    return collectComments(el);
+  };
+  var findTrigger = function (el, k) {
+    var nodes = Array.prototype.slice.call(el.querySelectorAll('[role="button"],[aria-label],span'));
+    if (k === 'like') {
+      return nodes.filter(function (n) { return /^(tất cả cảm xúc|all reactions|xem ai đã bày tỏ cảm xúc|see who reacted|cảm xúc:|reactions:)/i.test((n.getAttribute('aria-label') || '').trim()); })[0] ||
+        nodes.filter(function (n) { return /^(tất cả cảm xúc|all reactions)/i.test(textOf(n)); })[0] || null;
+    }
+    return nodes.filter(function (n) { return /^[\d.,]+\s*(k|n|tr|m)?\s*(lượt chia sẻ|chia sẻ|shares?)$/i.test(textOf(n)); })[0] || null;
+  };
+  var openList = async function (trigger, k) {
+    var before = visibleDialogs();
+    (trigger.closest('[role="button"]') || trigger).click();
+    for (var t = 0; t < 20; t++) {
+      await sleep(400);
+      var now = visibleDialogs().filter(function (d) { return before.indexOf(d) < 0; });
+      var hit = now.filter(function (d) { return listKindOf(d) === k; })[0] || now[0];
+      if (hit) { await sleep(1200); return hit; }
+    }
+    return null;
+  };
+  var closeDialog = async function (d) {
+    var b = d.querySelector('[aria-label="Đóng"],[aria-label="Close"]');
+    if (b) b.click(); else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+    for (var t = 0; t < 10 && document.contains(d) && d.getClientRects().length; t++) await sleep(300);
+  };
+  var finish = function (payload, summary) {
+    var data = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    msg(summary);
     var btn = box.querySelector('[data-stop]');
     btn.textContent = '📨 Mở PCCV để đối chiếu';
-    btn.onclick = function () {
-      window.open(site + '#seed-import=' + data, 'pccv-import');
-      box.remove();
-      window.__pccvRunning = false;
-    };
+    btn.onclick = function () { window.open(site + '#seed-import=' + data, 'pccv-import'); box.remove(); window.__pccvRunning = false; };
     var x = document.createElement('button');
     x.textContent = 'Đóng';
     x.style.cssText = 'margin-left:6px;padding:6px 10px;border-radius:6px;border:0;cursor:pointer';
     x.onclick = function () { box.remove(); window.__pccvRunning = false; };
     btn.after(x);
+  };
+  var post = location.href.split('#')[0];
+  var LBL = { like: 'Cảm xúc', comment: 'Bình luận', share: 'Chia sẻ' };
+
+  (async function () {
+    if (listKind) {
+      // Đang mở sẵn 1 khung cảm xúc / chia sẻ → chỉ lấy khung đó
+      var one = toArr(await scrollList(dlg, LBL[listKind]));
+      finish({ kind: listKind, post: post, names: one }, 'Xong! ' + LBL[listKind] + ': ' + one.length + ' tên.');
+      return;
+    }
+    // Chế độ ĐẦY ĐỦ: bình luận + cảm xúc + chia sẻ của bài viết đang mở
+    var lists = {}, missing = {};
+    lists.comment = toArr(await expandComments(postRoot));
+    for (var k of ['like', 'share']) {
+      if (stop) break;
+      msg(LBL[k] + ': đang mở danh sách…');
+      var trig = findTrigger(postRoot, k);
+      if (!trig) { missing[k] = 'không thấy nút ' + (k === 'like' ? 'số lượt cảm xúc' : 'số lượt chia sẻ') + ' (có thể bài chưa có ' + LBL[k].toLowerCase() + ')'; continue; }
+      var d = await openList(trig, k);
+      if (!d) { missing[k] = 'bấm vào nhưng không mở được khung danh sách'; continue; }
+      lists[k] = toArr(await scrollList(d, LBL[k]));
+      await closeDialog(d);
+      await sleep(800);
+    }
+    var sum = ['like', 'comment', 'share'].map(function (k) { return LBL[k] + ': ' + (lists[k] ? lists[k].length : '✗'); }).join(' · ');
+    finish({ kind: 'all', post: post, lists: lists, missing: missing, names: [] }, 'Xong! ' + sum);
   })();
 };
