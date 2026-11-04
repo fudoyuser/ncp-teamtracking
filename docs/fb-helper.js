@@ -22,7 +22,7 @@ window.fbHelper = function fbHelper(site, opts) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v10</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v11</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -209,7 +209,7 @@ window.fbHelper = function fbHelper(site, opts) {
   };
   var collectList = function (el) {
     var out = {};
-    var scope = findScroller(el) || el;
+    var scope = el;
     // 1) Tên nằm trong link trang cá nhân
     scope.querySelectorAll('a[href]').forEach(function (a) {
       if (goodLink(a)) addName(out, textOf(a), cleanUrl(a.getAttribute('href')));
@@ -232,8 +232,9 @@ window.fbHelper = function fbHelper(site, opts) {
   var toArr = function (o) { return Object.keys(o).map(function (k) { return { name: k, url: o[k] }; }); };
 
   var diag = {};
+  var rowImgs = function (L) { return Array.prototype.filter.call(L.querySelectorAll('img,image'), function (im) { return !im.closest('[role="tablist"],[role="tab"]'); }); };
   var scrollList = async function (d, label) {
-    var acc = {}, stable = 0, last = -1, noScroller = 0, zero = 0, cachedSc = null, i = 0;
+    var acc = {}, stable = 0, last = -1, zero = 0, i = 0, how = '';
     // Facebook xóa các hàng đã cuộn qua → cộng dồn tên sau mỗi lần cuộn
     var merge = function () {
       var o = collectList(d);
@@ -243,22 +244,32 @@ window.fbHelper = function fbHelper(site, opts) {
     await sleep(2000);
     merge();
     for (i = 0; i < 400 && !stop; i++) {
-      var sc = (cachedSc && document.contains(cachedSc)) ? cachedSc : findScroller(d);
-      // Cuộn từng đoạn (không nhảy thẳng xuống đáy) để Facebook vẽ đủ mọi hàng ở giữa
-      if (sc) { cachedSc = sc; sc.scrollTop = Math.min(sc.scrollTop + Math.max(200, sc.clientHeight * 0.7), sc.scrollHeight); noScroller = 0; }
-      else if (++noScroller >= 8) break;
+      var rows = rowImgs(d), lastRow = rows[rows.length - 1];
+      var sc = findScroller(d);
+      var atEnd = false;
+      if (sc && lastRow && sc.contains(lastRow)) {
+        // Cuộn từng đoạn để Facebook vẽ đủ mọi hàng ở giữa
+        sc.scrollTop = Math.min(sc.scrollTop + Math.max(200, sc.clientHeight * 0.7), sc.scrollHeight);
+        atEnd = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 5;
+        how = 'thanh cuộn';
+      } else if (lastRow) {
+        // Không chắc thanh cuộn nào → kéo hàng cuối vào tầm nhìn, trình duyệt tự cuộn đúng khung
+        (lastRow.closest('a,div') || lastRow).scrollIntoView({ block: 'end', behavior: 'instant' });
+        atEnd = true;
+        how = 'kéo hàng cuối';
+      }
       await sleep(900 + Math.random() * 700);
       var n = merge();
-      var atEnd = !sc || sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 5;
-      msg(label + ': đang tự cuộn… ' + n + ' tên' + (sc ? '' : ' (chưa thấy thanh cuộn)'));
+      msg(label + ': đang tự cuộn… ' + n + ' tên');
       if (n === 0) { if (++zero >= 8) break; } else zero = 0;
       if (n === last && atEnd) { if (++stable >= 4 && n > 0) break; } else { stable = 0; last = n; }
     }
     merge();
     diag.list = {
       head: headOf(d).trim().slice(0, 60),
+      role: d.getAttribute('role') || d.tagName,
       tabs: d.querySelectorAll('[role="tab"]').length,
-      scroller: !!cachedSc,
+      scroll: how,
       rounds: i,
       links: d.querySelectorAll('a[href]').length,
       imgs: d.querySelectorAll('img,image').length,
@@ -316,38 +327,84 @@ window.fbHelper = function fbHelper(site, opts) {
     if (listKindOf(d) === 'like') return true;
     return Array.prototype.some.call(d.querySelectorAll('[role="tab"]'), function (tb) { return /^(tất cả|all)(\s|$|\d)/i.test(textOf(tb)); });
   };
+  // Khung nổi ở giữa màn hình (danh sách cảm xúc) – không dựa vào cách Facebook đánh dấu khung
+  var locatePopup = function () {
+    var W = innerWidth, H = innerHeight;
+    var pts = [[0.5, 0.5], [0.5, 0.42], [0.5, 0.58], [0.44, 0.5], [0.56, 0.5]];
+    for (var i = 0; i < pts.length; i++) {
+      var el = document.elementFromPoint(W * pts[i][0], H * pts[i][1]);
+      if (!el || box.contains(el)) continue;
+      var dd = el.closest('[role="dialog"]');
+      if (dd && !dd.querySelector('[role="article"]') && rowImgs(dd).length) return dd;
+      var best = null;
+      for (var up = el; up && up !== document.body && up !== document.documentElement; up = up.parentElement) {
+        var role = up.getAttribute('role');
+        if (role === 'article' || role === 'main' || up.querySelector('[role="article"]')) break;
+        var r = up.getBoundingClientRect();
+        if (r.width > W * 0.9) break;
+        if (rowImgs(up).length >= 2 && r.height > 120) best = up;
+      }
+      if (best) return best;
+    }
+    return null;
+  };
+  var describeCenter = function () {
+    var out = [], el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+    for (var k = 0; el && k < 10; k++, el = el.parentElement) {
+      var r = el.getBoundingClientRect();
+      out.push(el.tagName.toLowerCase() + (el.getAttribute('role') ? '[' + el.getAttribute('role') + ']' : '') +
+        (el.getAttribute('aria-label') ? '"' + el.getAttribute('aria-label').slice(0, 20) + '"' : '') + ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
+    }
+    return out.join(' < ');
+  };
   // Chờ NGƯỜI DÙNG bấm vào số lượt cảm xúc của đúng bài → trả về khung danh sách + chỗ đã bấm
   var waitReactClick = function () {
     return new Promise(function (resolve) {
-      var lastClick = null, clickAt = 0, skipped = false, clicks = 0;
-      var snap = visibleDialogs();
+      var lastClick = null, clickAt = 0, skipped = false, manual = false, clicks = 0, snap = visibleDialogs();
+      var added = [];
+      var mo = new MutationObserver(function (ms) {
+        if (!clickAt) return;
+        ms.forEach(function (m) { Array.prototype.forEach.call(m.addedNodes, function (n) { if (n.nodeType === 1 && !box.contains(n)) added.push(n); }); });
+        if (added.length > 5000) added = added.slice(-2000);
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+      var isNew = function (c) {
+        return added.some(function (r) { return r === c || r.contains(c) || (c.contains(r) && r.querySelector && r.querySelector('img,image')); });
+      };
       var onClick = function (e) {
         if (box.contains(e.target)) return;
-        lastClick = e.target; clickAt = Date.now(); clicks++;
-        snap = visibleDialogs(); // khung có sẵn TRƯỚC lần bấm này
+        lastClick = e.target; clickAt = Date.now(); clicks++; added = [];
+        snap = visibleDialogs();
       };
       document.addEventListener('click', onClick, true);
-      var sk = document.createElement('button');
-      sk.textContent = 'Bài chưa có cảm xúc → bỏ qua';
-      sk.style.cssText = 'margin-top:6px;padding:6px 10px;border-radius:6px;border:0;cursor:pointer;display:block';
+      var mk = function (t) { var b = document.createElement('button'); b.textContent = t; b.style.cssText = 'margin-top:6px;padding:6px 10px;border-radius:6px;border:0;cursor:pointer;display:block;width:100%'; box.appendChild(b); return b; };
+      var go = mk('📋 Khung cảm xúc đã mở → quét ngay');
+      var sk = mk('Bài chưa có cảm xúc → bỏ qua');
+      go.onclick = function () { manual = true; };
       sk.onclick = function () { skipped = true; };
-      box.appendChild(sk);
       var iv = setInterval(function () {
         if (stop || skipped) return done(null);
-        if (!clickAt) return;
-        var fresh = visibleDialogs().filter(function (x) { return snap.indexOf(x) < 0 && !x.contains(box); });
-        var d = fresh.filter(isReactDialog)[0], how = 'tiêu đề/tab';
-        // Khung mới không phải bài viết (không chứa bình luận/bài) hiện ra ngay sau lần bấm
-        if (!d && Date.now() - clickAt < 15000) { d = fresh.filter(function (x) { return !x.querySelector('[role="article"]'); })[0]; how = 'khung mới sau lần bấm'; }
-        // Không có role="dialog": tìm tab "Tất cả" đang hiện → leo lên khối có thanh cuộn
-        if (!d) {
-          var tb = Array.prototype.filter.call(document.querySelectorAll('[role="tab"]'), function (t) { return t.getClientRects().length && /^(tất cả|all)(\s|$|\d)/i.test(textOf(t)); })[0];
-          for (var up = tb && tb.parentElement, lv = 0; up && lv < 10; up = up.parentElement, lv++) if (findScroller(up)) { d = up; how = 'tab Tất cả'; break; }
+        var p = null, how = '';
+        if (manual) {
+          manual = false;
+          p = locatePopup(); how = 'nút quét ngay';
+          if (!p) {
+            diag.center = describeCenter();
+            msg('⚠️ Không thấy khung danh sách ở giữa màn hình. Mở khung cảm xúc rồi bấm lại nút.');
+            return;
+          }
+        } else if (clickAt) {
+          p = visibleDialogs().filter(function (x) { return snap.indexOf(x) < 0 && !x.contains(box) && isReactDialog(x); })[0];
+          how = 'khung có tab Tất cả';
+          if (!p) {
+            var c = locatePopup();
+            if (c && isNew(c)) { p = c; how = 'khung mới giữa màn hình'; }
+          }
+          if (!p && Date.now() - clickAt > 6000) msg('⚠️ Chưa tự nhận ra khung cảm xúc. Nếu khung đã mở, bấm nút "📋 Khung cảm xúc đã mở → quét ngay".');
         }
-        if (d) { diag.detect = how + ' · số lần bấm: ' + clicks; return done({ dialog: d, target: lastClick }); }
-        if (Date.now() - clickAt > 6000) msg('⚠️ Chưa nhận ra khung cảm xúc. Hãy bấm đúng vào CON SỐ cảm xúc (👍❤️ 28) dưới bài – không phải nút Thích.');
-      }, 400);
-      function done(r) { clearInterval(iv); document.removeEventListener('click', onClick, true); sk.remove(); resolve(r); }
+        if (p) { diag.detect = how + ' · số lần bấm: ' + clicks; done({ dialog: p, target: lastClick }); }
+      }, 500);
+      function done(r) { clearInterval(iv); mo.disconnect(); document.removeEventListener('click', onClick, true); go.remove(); sk.remove(); resolve(r); }
     });
   };
 
@@ -379,7 +436,8 @@ window.fbHelper = function fbHelper(site, opts) {
     }
     // Bình luận: trong khung bài viết chứa nút vừa bấm; trang riêng thì vùng chính
     var pd = target && target.closest && target.closest('[role="dialog"]');
-    var root = (pd && !isReactDialog(pd)) ? pd : (document.querySelector('[role="main"]') || document);
+    var postDlg = visibleDialogs().filter(function (x) { return x.querySelector('[role="article"]'); }).pop();
+    var root = (pd && !isReactDialog(pd)) ? pd : (postDlg || document.querySelector('[role="main"]') || document);
     if (!stop) lists.comment = toArr(await expandComments(root));
     var sum = ['like', 'comment'].map(function (k) { return LBL[k] + ': ' + (lists[k] ? lists[k].length : '✗'); }).join(' · ');
     finish({ kind: 'all', post: post, lists: lists, missing: missing, names: [], diag: diag }, 'Xong! ' + sum);
