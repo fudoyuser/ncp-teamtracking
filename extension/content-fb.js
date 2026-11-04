@@ -1,29 +1,52 @@
-// Content script chạy trên facebook.com – tự kích hoạt quét khi có hash #pccv-scan=
+// Content script chạy trên facebook.com
+// Hỏi background.js xem có lệnh quét nào không → nếu có, tự chạy fbHelper
 (function () {
   'use strict';
-  var m = location.hash.match(/#pccv-scan=(.+)/);
-  if (!m) return; // không có hash → không làm gì
 
-  var scan;
-  try { scan = JSON.parse(decodeURIComponent(m[1])); } catch (e) { return; }
-  var site = scan.site || '';
-  var cid = scan.cid || '';
-  if (!site) return;
+  // Cũng kiểm tra hash cũ (bookmarklet fallback)
+  var hashScan = null;
+  try {
+    var m = location.hash.match(/#pccv-scan=(.+)/);
+    if (m) {
+      hashScan = JSON.parse(decodeURIComponent(m[1]));
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  } catch (e) {}
 
-  // Đợi trang Facebook tải xong (khoảng 4-6 giây)
-  var wait = 5000;
-  setTimeout(function () {
-    if (typeof window.fbHelper !== 'function') return;
-    window.fbHelper(site, {
-      campaignId: cid,
-      onDone: function (data) {
-        // Gửi kết quả về background script → mở PCCV với dữ liệu
-        chrome.runtime.sendMessage({
-          type: 'pccv-scan-done',
-          data: data,
-          site: site
+  function startScan(site, cid) {
+    // Đợi trang Facebook tải xong
+    var checks = 0;
+    var maxChecks = 30; // 30 x 2s = 60 giây tối đa
+    var timer = setInterval(function () {
+      checks++;
+      // Kiểm tra trang đã có nội dung chưa (article, reaction counts, etc.)
+      var hasContent = document.querySelector('[role="article"]') ||
+        document.querySelector('[role="main"] [aria-label]') ||
+        document.querySelector('[data-pagelet]');
+      if (hasContent || checks >= maxChecks) {
+        clearInterval(timer);
+        if (typeof window.fbHelper !== 'function') return;
+        window.fbHelper(site, {
+          campaignId: cid,
+          onDone: function (data) {
+            chrome.runtime.sendMessage({
+              type: 'scan-done',
+              data: data,
+              site: site
+            });
+          }
         });
       }
-    });
-  }, wait);
+    }, 2000);
+  }
+
+  // Ưu tiên: hỏi background.js
+  chrome.runtime.sendMessage({ type: 'check-scan' }, function (scan) {
+    if (scan && scan.cid) {
+      startScan(scan.site, scan.cid);
+    } else if (hashScan && hashScan.site) {
+      // Fallback: hash trên URL (bookmarklet flow)
+      startScan(hashScan.site, hashScan.cid || '');
+    }
+  });
 })();
