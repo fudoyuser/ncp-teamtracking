@@ -11,7 +11,7 @@ window.fbHelper = function fbHelper(site) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v2</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -32,30 +32,56 @@ window.fbHelper = function fbHelper(site) {
           return seg && seg !== 'share' && seg !== 'login' ? 'https://www.facebook.com/' + seg : '';
         } catch (e) { return ''; }
       };
+      var pickH1 = function (d) {
+        var hs = Array.prototype.map.call(d.querySelectorAll('h1'), function (h) { return (h.innerText || h.textContent || '').trim().split('\n')[0].trim(); });
+        return hs.filter(function (t) { return t && !BAD.test(t) && !/^(thông báo|notifications|bảng feed|feeds?|trang chủ|home)$/i.test(t); })[0] || '';
+      };
+      // Mở 1 cửa sổ nhỏ (ngay lúc bấm nút nên không bị chặn popup), rồi lần lượt chuyển cửa sổ đó tới từng trang cá nhân
+      var win = window.open('about:blank', 'pccv-reader', 'width=520,height=640,left=40,top=40');
       (async function () {
         var out = [];
+        var prev = 'about:blank';
         for (var i = 0; i < list.length && !stop; i++) {
           var it = list[i];
           msg('Đang đọc ' + (i + 1) + '/' + list.length + '…');
-          var name = '', url = '';
-          try {
-            var r = await fetch(it.url, { credentials: 'include' });
-            var html = await r.text();
-            var doc = new DOMParser().parseFromString(html, 'text/html');
-            var og = doc.querySelector('meta[property="og:title"]');
-            name = ((og && og.getAttribute('content')) || doc.title || '').replace(/^\(\d+\+?\)\s*/, '').replace(/\s*[|\-–]\s*Facebook\s*$/i, '').trim();
-            if (BAD.test(name)) name = '';
-            url = cleanProfile(r.url) || cleanProfile((doc.querySelector('link[rel="canonical"]') || {}).href || '') || '';
-          } catch (e) { /* bỏ qua người này */ }
-          out.push({ id: it.id, name: name, url: url });
-          await sleep(1800 + Math.random() * 1200);
+          var name = '', url = '', why = '';
+          if (win && !win.closed) {
+            try {
+              win.location.href = it.url;
+              var t0 = Date.now();
+              while (Date.now() - t0 < 20000 && !stop) {
+                await sleep(800);
+                var d = null;
+                try { d = win.document; } catch (e) { why = 'không truy cập được cửa sổ'; break; }
+                if (!d || !d.location || d.location.href === prev || d.location.href === 'about:blank') continue;
+                if (/\/login|checkpoint/.test(d.location.pathname)) { why = 'Facebook yêu cầu đăng nhập/xác minh'; break; }
+                var h = pickH1(d);
+                if (h) { name = h; url = cleanProfile(d.location.href); prev = d.location.href; break; }
+              }
+              if (!name && !why) why = 'trang không hiện tên sau 20 giây';
+            } catch (e) { why = 'lỗi cửa sổ: ' + e.message; }
+          } else { why = 'cửa sổ phụ bị chặn – hãy cho phép cửa sổ bật lên (popup) cho facebook.com'; }
+          if (!name) {
+            // Phương án dự phòng: tải HTML của trang
+            try {
+              var r = await fetch(it.url, { credentials: 'include' });
+              var doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+              var og = doc.querySelector('meta[property="og:title"]');
+              var nm = ((og && og.getAttribute('content')) || doc.title || '').replace(/^\(\d+\+?\)\s*/, '').replace(/\s*[|\-–]\s*Facebook\s*$/i, '').trim();
+              if (nm && !BAD.test(nm)) { name = nm; url = cleanProfile(r.url); why = ''; }
+              else if (!why) why = 'tiêu đề trang: "' + (doc.title || '') + '"';
+            } catch (e) { if (!why) why = 'không tải được trang'; }
+          }
+          out.push({ id: it.id, name: name, url: url, why: name ? '' : why });
+          await sleep(1200 + Math.random() * 1200);
         }
+        try { if (win && !win.closed) win.close(); } catch (e) { /* bỏ qua */ }
         var ok = out.filter(function (x) { return x.name; }).length;
         msg('Xong: đọc được ' + ok + '/' + out.length + ' người.');
         var b = box.querySelector('[data-stop]');
-        var d = btoa(unescape(encodeURIComponent(JSON.stringify({ kind: 'profiles', items: out, names: [] }))));
+        var dd = btoa(unescape(encodeURIComponent(JSON.stringify({ kind: 'profiles', items: out, names: [] }))));
         b.textContent = '📨 Gửi kết quả về PCCV';
-        b.onclick = function () { window.open(site + '#seed-import=' + d, 'pccv-import'); box.remove(); window.__pccvRunning = false; };
+        b.onclick = function () { window.open(site + '#seed-import=' + dd, 'pccv-import'); box.remove(); window.__pccvRunning = false; };
       })();
       return;
     }

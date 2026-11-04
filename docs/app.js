@@ -722,7 +722,7 @@
         <div class="table-wrap"><table class="mini"><thead><tr><th></th><th>Thành viên</th><th>Tên Facebook</th><th>Link trang cá nhân</th></tr></thead><tbody>
         ${rows.map((r, i) => `<tr><td><input type="checkbox" name="row" value="${i}" ${r.x.name ? 'checked' : 'disabled'} aria-label="Lưu dòng này"></td>
           <td>${esc(r.m.name)}</td>
-          <td>${r.x.name ? `<b>${esc(r.x.name)}</b>${r.m.fbName && r.m.fbName !== r.x.name ? `<div class="muted small">cũ: ${esc(r.m.fbName)}</div>` : ''}` : '<span class="badge danger">Không đọc được</span>'}</td>
+          <td>${r.x.name ? `<b>${esc(r.x.name)}</b>${r.m.fbName && r.m.fbName !== r.x.name ? `<div class="muted small">cũ: ${esc(r.m.fbName)}</div>` : ''}` : `<span class="badge danger">Không đọc được</span>${r.x.why ? `<div class="muted small">${esc(r.x.why)}</div>` : ''}`}</td>
           <td class="small">${r.x.name && r.x.url ? `<a href="${esc(r.x.url)}" target="_blank" rel="noopener">${esc(r.x.url.replace(/^https?:\/\/(www\.)?/, ''))}</a>` : '<span class="muted">giữ link cũ</span>'}</td></tr>`).join('')}
         </tbody></table></div></div>
       <footer class="m-foot"><span></span><div><button type="button" class="btn" data-act="close">Hủy</button><button class="btn primary" id="batch-btn">Lưu tất cả</button></div></footer></form>`);
