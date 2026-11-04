@@ -479,7 +479,7 @@
     const c = checkOf(cid, mid, action);
     if (!c) return false;
     if (LINKED.includes(action)) return !!c.proofUrl && c.verified !== 'not_found';
-    return c.verified === 'found' || (c.selfDone && c.verified !== 'not_found');
+    return c.verified === 'found'; // Like/Comment: chỉ tính khi đối chiếu thấy tên
   };
   const scanActs = (c) => c.actions.filter((a) => !LINKED.includes(a));
   const required = (c) => c.actions.filter((a) => !BONUS.includes(a));
@@ -498,16 +498,16 @@
         <div class="tc-meta">${c.deadline ? deadlineBadge(c.deadline, memberDone(c, me().id)) : ''} ${c.postUrl ? `<a href="${esc(c.postUrl)}" target="_blank" rel="noopener">Mở bài viết ↗</a>` : ''}</div></div></div>
       <div class="seed-actions">${c.actions.map((a) => {
         const ch = checkOf(c.id, me().id, a) || {};
-        const v = ch.verified === 'found' ? '<span class="badge ok">🟢 Đã thấy tên bạn</span>' : ch.verified === 'not_found' ? '<span class="badge danger">🔴 Chưa thấy tên bạn</span>' : '';
+        const v = ch.verified === 'found' ? '<span class="badge ok">🟢 Đã thấy tên bạn</span>' : ch.verified === 'not_found' ? '<span class="badge danger">🔴 Chưa thấy tên bạn</span>' : '<span class="badge muted">⏳ Chưa đối chiếu</span>';
         if (LINKED.includes(a)) {
           const bad = ch.verified === 'not_found';
           return `<div class="seed-act"><span>${ACTIONS[a]} <span class="muted small">(không bắt buộc, cộng điểm)</span></span>
             ${ch.proofUrl ? (bad ? '<span class="badge danger">✗ Link không hợp lệ</span>' : '<span class="badge ok">✓ Đã nộp link</span>') : ''}
             <div class="proof"><input placeholder="Dán link bài share của bạn (https://www.facebook.com/…)" value="${esc(ch.proofUrl || '')}" data-proof="${esc(c.id)}" aria-label="Link bài share">
-            <button class="btn small" data-act="seed-proof" data-cid="${esc(c.id)}">Lưu link</button></div></div>`;
+            <button class="btn small" data-act="seed-proof" data-cid="${esc(c.id)}">Lưu link</button></div>
+            <div class="muted small">⚠ Bài share phải để chế độ <b>Công khai 🌐</b> – không công khai sẽ bị tính là không hợp lệ.</div></div>`;
         }
-        return `<div class="seed-act"><label class="check"><input type="checkbox" data-change="seed-self" data-cid="${esc(c.id)}" data-action="${a}" ${ch.selfDone ? 'checked' : ''}> ${ACTIONS[a]}</label> ${v}
-</div>`;
+        return `<div class="seed-act"><span>${ACTIONS[a]}</span> ${v}</div>`;
       }).join('')}</div></div>`;
     const allCard = (c) => {
       const total = participants().length;
@@ -520,7 +520,7 @@
     const tabs = `<div class="subtabs"><button class="subtab ${state.seedTab !== 'stats' ? 'active' : ''}" data-act="seed-tab" data-tab="list">📋 Đợt seeding</button>
       <button class="subtab ${state.seedTab === 'stats' ? 'active' : ''}" data-act="seed-tab" data-tab="stats">📊 Thống kê</button></div>`;
     if (state.seedTab === 'stats') return tabs + viewSeedStats();
-    return tabs + `<div class="page-head row"><div><h2>Seeding</h2><p class="muted"><b>Like + Comment</b> bài fanpage là bắt buộc: tick khi đã làm, trưởng ban đối chiếu với danh sách trên Facebook. <b>⭐ Share</b> không bắt buộc (cộng điểm): dán link bài share của bạn.</p></div>
+    return tabs + `<div class="page-head row"><div><h2>Seeding</h2><p class="muted"><b>Like + Comment</b> bài fanpage là bắt buộc – trưởng ban đối chiếu với danh sách trên Facebook, có tên mới tính hoàn thành. <b>⭐ Share</b> không bắt buộc (cộng điểm): share ở chế độ <b>Công khai</b> rồi dán link bài share.</p></div>
         <div class="actions"><button class="btn" data-act="my-fb">ⓕ Facebook của tôi${me().fbName || me().fbUrl ? '' : ' (chưa điền)'}</button>
         ${canSeed() ? '<button class="btn primary" data-act="seed-new">＋ Tạo đợt seeding</button>' : ''}</div></div>
       ${!me().fbName && !me().fbUrl && mine.length ? '<div class="banner"><div><b>ⓕ Điền tên Facebook của bạn</b><br><span class="small">Nếu tên Facebook khác tên thật (vd. "Dương Phan", biệt danh…), hãy điền để hệ thống nhận ra bạn khi đối chiếu.</span></div><button class="btn primary small" data-act="my-fb">Điền ngay</button></div>' : ''}
@@ -625,7 +625,6 @@
           ${lead ? `<button type="button" class="btn ghost small" data-act="share-valid" data-cid="${esc(c.id)}" data-mid="${esc(m.id)}" data-bad="${bad ? '0' : '1'}">${bad ? 'Đánh dấu hợp lệ' : 'Không hợp lệ'}</button>` : ''}`;
       }
       let s = ch.verified === 'found' ? '<span class="badge ok">🟢 Có tên</span>' : ch.verified === 'not_found' ? '<span class="badge danger">🔴 Chưa thấy</span>' : '';
-      if (ch.selfDone) s += ' <span class="badge" title="Thành viên tự xác nhận">✅ Tự báo</span>';
       if (a === 'share' && ch.proofUrl) s += ` <a class="link" href="${esc(ch.proofUrl)}" target="_blank" rel="noopener">🔗 bằng chứng</a>`;
       return s || '<span class="muted small">—</span>';
     };
@@ -639,7 +638,7 @@
           ${rows.map((m) => `<tr><td>${esc(m.name)}${fbLink(m)}${m.fbName ? `<div class="muted small">FB: ${esc(m.fbName)}</div>` : ''}</td>
             ${c.actions.map((a) => `<td>${cell(m, a)}</td>`).join('')}<td>${memberDone(c, m.id) ? '✔' : ''}</td></tr>`).join('')}
         </tbody></table></div>
-        <p class="muted small"><b>Hoàn thành</b> = có đủ ${required(c).map((a) => ACTIONS[a]).join(' + ')} (có tên khi đối chiếu, hoặc tự báo mà chưa bị đối chiếu là "Chưa thấy"). ${c.actions.includes('share') ? `<b>⭐ Share</b> không bắt buộc – ${bonusCount(c)} người đã share, dùng để cộng điểm.` : ''}</p>
+        <p class="muted small"><b>Hoàn thành</b> = có tên khi đối chiếu cả ${required(c).map((a) => ACTIONS[a]).join(' + ')}. ${c.actions.includes('share') ? `<b>⭐ Share</b> không bắt buộc – ${bonusCount(c)} người đã nộp link, dùng để cộng điểm. Mở link để kiểm tra bài có để <b>Công khai</b>; không công khai → bấm "Không hợp lệ".` : ''}</p>
       </div>
       <footer class="m-foot">${lead ? `<div><button type="button" class="btn danger-ghost" data-act="seed-delete" data-id="${esc(c.id)}">Xóa đợt</button>
         <button type="button" class="btn ghost" data-act="seed-edit" data-id="${esc(c.id)}">Sửa</button></div>` : '<span></span>'}
