@@ -22,7 +22,7 @@ window.fbHelper = function fbHelper(site, opts) {
   var box = document.createElement('div');
   box.style.cssText = 'position:fixed;z-index:2147483647;top:16px;right:16px;background:#1a56db;color:#fff;padding:12px 16px;' +
     'border-radius:10px;font:14px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);width:280px';
-  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v6</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
+  box.innerHTML = '<b>📣 Gửi sang PCCV</b> <small style="opacity:.7">v7</small><div data-m style="margin:6px 0 10px">Đang bắt đầu…</div>' +
     '<button data-stop style="padding:6px 10px;border-radius:6px;border:0;cursor:pointer">Dừng & dùng danh sách hiện có</button>';
   document.body.appendChild(box);
   var stop = false;
@@ -185,24 +185,66 @@ window.fbHelper = function fbHelper(site, opts) {
   // Người trong khung danh sách (cảm xúc / chia sẻ)
   var collectList = function (el) {
     var out = {};
+    // 1) Cách chính: a[href] có tên hợp lệ
     el.querySelectorAll('a[href]').forEach(function (a) {
       if (!goodLink(a)) return;
       var t = textOf(a);
       if (!(t in out) || !out[t]) out[t] = cleanUrl(a.getAttribute('href'));
     });
+    // 2) Fallback: Facebook đôi khi dùng span/div chứa tên trong các hàng danh sách
+    //    Tìm các hàng có link profile + tên hiển thị riêng
+    if (Object.keys(out).length === 0) {
+      // Tìm trong các hàng chứa link profile (a[href*="/profile"] hoặc a[href^="/"])
+      el.querySelectorAll('a[href]').forEach(function (a) {
+        var href = a.getAttribute('href') || '';
+        if (!/^\/(profile\.php|[a-zA-Z0-9.]+)\/?(\?|$)/.test(href) && !/facebook\.com\/(profile\.php|[a-zA-Z0-9.]+)\/?(\?|$)/.test(href)) return;
+        // Tìm tên trong row chứa link này
+        var row = a.closest('[class]');
+        if (!row) return;
+        var spans = row.querySelectorAll('span');
+        spans.forEach(function (sp) {
+          var t = textOf(sp);
+          if (t && t.length >= 2 && t.length <= 60 && !JUNK.test(t) && !/^\d/.test(t)) {
+            if (!(t in out) || !out[t]) out[t] = cleanUrl(href);
+          }
+        });
+      });
+    }
+    // 3) Fallback cuối: tìm aria-label trên các hàng trong danh sách
+    if (Object.keys(out).length === 0) {
+      el.querySelectorAll('[aria-label]').forEach(function (n) {
+        var label = (n.getAttribute('aria-label') || '').trim();
+        // Bỏ qua aria-label quá dài, quá ngắn, hoặc là tên nút
+        if (!label || label.length < 2 || label.length > 60 || JUNK.test(label)) return;
+        if (/đóng|close|tất cả|all|tab|nút|button/i.test(label)) return;
+        // Tìm link profile gần nhất
+        var link = n.querySelector('a[href]') || (n.closest('a[href]'));
+        var url = link ? cleanUrl(link.getAttribute('href')) : '';
+        if (!(label in out)) out[label] = url;
+      });
+    }
     return out;
   };
   var toArr = function (o) { return Object.keys(o).map(function (k) { return { name: k, url: o[k] }; }); };
 
   var scrollList = async function (d, label) {
-    var stable = 0, last = -1;
+    var stable = 0, last = -1, noScroller = 0;
+    // Đợi nội dung dialog load (Facebook lazy-load danh sách cảm xúc)
+    await sleep(1500);
     for (var i = 0; i < 400 && !stop; i++) {
       var sc = findScroller(d);
-      if (sc) sc.scrollTop = sc.scrollHeight; else break;
+      if (sc) {
+        sc.scrollTop = sc.scrollHeight;
+        noScroller = 0;
+      } else {
+        // Không tìm thấy scroller – chờ thêm vài lần thay vì break ngay
+        noScroller++;
+        if (noScroller >= 8) break; // chỉ break sau 8 lần liên tiếp (~16s)
+      }
       await sleep(1100 + Math.random() * 900);
       var n = Object.keys(collectList(d)).length;
-      msg(label + ': đang tự cuộn… ' + n + ' tên');
-      if (n === last) { if (++stable >= 4) break; } else { stable = 0; last = n; }
+      msg(label + ': đang tự cuộn… ' + n + ' tên' + (sc ? '' : ' (đợi scroller…)'));
+      if (n === last) { if (++stable >= 4 && n > 0) break; } else { stable = 0; last = n; }
     }
     return collectList(d);
   };
@@ -250,17 +292,22 @@ window.fbHelper = function fbHelper(site, opts) {
   var openList = async function (triggers, k) {
     for (var i = 0; i < triggers.length && i < 4; i++) {
       var before = visibleDialogs();
+      // Cuộn trigger vào tầm nhìn trước khi click
+      triggers[i].scrollIntoView({ block: 'center', behavior: 'instant' });
+      await sleep(300);
       triggers[i].click();
-      for (var t = 0; t < 15; t++) {
-        await sleep(400);
+      // Đợi lâu hơn (25 lần × 500ms = 12.5s) vì Facebook load dialog chậm
+      for (var t = 0; t < 25; t++) {
+        await sleep(500);
         var now = visibleDialogs().filter(function (d) { return before.indexOf(d) < 0; });
         var hit = now.filter(function (d) { return listKindOf(d) === k; })[0] || now[0];
         if (hit) {
-          await sleep(1200);
+          // Đợi thêm cho nội dung dialog load xong
+          await sleep(2000);
           if (k === 'like') {
             // Nếu khung đang lọc 1 loại cảm xúc → chuyển sang tab "Tất cả"
             var all = Array.prototype.filter.call(hit.querySelectorAll('[role="tab"]'), function (tb) { return /^(tất cả|all)(\s|$|\d)/i.test(textOf(tb)); })[0];
-            if (all && all.getAttribute('aria-selected') !== 'true') { all.click(); await sleep(1200); }
+            if (all && all.getAttribute('aria-selected') !== 'true') { all.click(); await sleep(2000); }
           }
           return hit;
         }
@@ -309,10 +356,15 @@ window.fbHelper = function fbHelper(site, opts) {
     // Chế độ ĐẦY ĐỦ: bình luận + cảm xúc + chia sẻ của bài viết đang mở
     var lists = {}, missing = {};
     lists.comment = toArr(await expandComments(postRoot));
+    // Cuộn về đầu bài viết trước khi quét cảm xúc (expandComments đã cuộn xuống dưới)
+    window.scrollTo(0, 0);
+    await sleep(1500);
+    // Cập nhật lại postRoot sau khi cuộn (DOM có thể thay đổi)
+    var freshPostRoot = document.querySelector('[role="main"]') || document;
     for (var k of ['like']) { // share: thành viên tự nộp link, không quét
       if (stop) break;
       msg(LBL[k] + ': đang mở danh sách…');
-      var trigs = findTriggers(postRoot, k);
+      var trigs = findTriggers(freshPostRoot, k);
       if (!trigs.length) { missing[k] = 'không thấy nút ' + (k === 'like' ? 'số lượt cảm xúc' : 'số lượt chia sẻ') + ' (có thể bài chưa có ' + LBL[k].toLowerCase() + '). Nhãn thấy được: ' + debugLabels(postRoot); continue; }
       var d = await openList(trigs, k);
       if (!d) { missing[k] = 'đã thử bấm ' + trigs.length + ' chỗ nhưng không mở được khung danh sách. Nhãn thấy được: ' + debugLabels(postRoot); continue; }
