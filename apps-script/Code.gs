@@ -118,7 +118,7 @@ function createAccount_(p) {
   try {
     member = db_.insert('members', [{ user_id: user.id, email, name, is_admin: !!p.isAdmin, must_change_password: true }])[0];
     const bans = (p.bans || []).filter(b => b && b.banId);
-    if (bans.length) db_.insert('member_bans', bans.map(b => ({ member_id: member.id, ban_id: b.banId, is_lead: !!b.isLead })));
+    if (bans.length) db_.insert('member_bans', bans.map(b => ({ member_id: member.id, ban_id: b.banId, is_lead: !!b.isLead, is_vice: !b.isLead && !!b.isVice })));
     db_.insert('email_confirm', [{ member_id: member.id }]);
   } catch (err) {
     authAdmin_('delete', '/users/' + user.id); // dọn dẹp nếu lỗi giữa chừng
@@ -401,7 +401,7 @@ function sendLeadSummaries_() {
   const members = indexBy_(d.members, 'id');
   const events = indexBy_(d.events, 'id');
   d.bans.forEach(ban => {
-    const leads = d.memberBans.filter(mb => mb.ban_id === ban.id && mb.is_lead).map(mb => members[mb.member_id]).filter(Boolean);
+    const leads = d.memberBans.filter(mb => mb.ban_id === ban.id && (mb.is_lead || mb.is_vice)).map(mb => members[mb.member_id]).filter(Boolean);
     if (!leads.length) return;
     const bt = d.tasks.filter(t => t.ban_id === ban.id);
     const partsOf = t => d.parts.filter(p => p.task_id === t.id);

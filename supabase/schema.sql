@@ -38,6 +38,8 @@ create table if not exists public.member_bans (
   is_lead boolean not null default false,   -- true = Trưởng ban
   primary key (member_id, ban_id)
 );
+-- Phó ban: cùng quyền quản lý Ban như Trưởng ban (giao việc, tạo/xóa việc, seeding)
+alter table public.member_bans add column if not exists is_vice boolean not null default false;
 
 create table if not exists public.events (
   id uuid primary key default gen_random_uuid(),
@@ -115,14 +117,14 @@ create or replace function public.is_lead_of(b uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from member_bans mb join members m on m.id = mb.member_id
-    where m.user_id = auth.uid() and m.active and mb.ban_id = b and mb.is_lead)
+    where m.user_id = auth.uid() and m.active and mb.ban_id = b and (mb.is_lead or mb.is_vice))
 $$;
 
 create or replace function public.is_any_lead() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from member_bans mb join members m on m.id = mb.member_id
-    where m.user_id = auth.uid() and m.active and mb.is_lead)
+    where m.user_id = auth.uid() and m.active and (mb.is_lead or mb.is_vice))
 $$;
 
 -- Admin, trưởng ban của Ban đó, hoặc Lead CV của công việc
@@ -154,6 +156,10 @@ begin
     if new.name is distinct from old.name or new.ban_id is distinct from old.ban_id
        or new.event_id is distinct from old.event_id or new.lead_ids is distinct from old.lead_ids then
       raise exception 'Bạn chỉ được cập nhật trạng thái, ghi chú và liên kết của công việc này';
+    end if;
+    -- Ban có link theo vai trò: thành viên chỉ nộp link vào đúng ô vai trò của mình (qua update_task_part)
+    if new.links is distinct from old.links and exists (select 1 from ban_roles where ban_id = old.ban_id and has_link) then
+      raise exception 'Hãy nộp link sản phẩm vào đúng ô vai trò được giao cho bạn';
     end if;
   end if;
   return new;

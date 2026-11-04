@@ -8,7 +8,7 @@
   const mapMember = (m, mbs) => ({
     id: m.id, userId: m.user_id, email: m.email, name: m.name, isAdmin: m.is_admin, active: m.active,
     mustChange: m.must_change_password, createdAt: m.created_at, fbName: m.fb_name || '', fbUrl: m.fb_url || '',
-    bans: mbs.filter((x) => x.member_id === m.id).map((x) => ({ banId: x.ban_id, isLead: x.is_lead })),
+    bans: mbs.filter((x) => x.member_id === m.id).map((x) => ({ banId: x.ban_id, isLead: x.is_lead, isVice: !!x.is_vice })),
   });
   const mapTask = (t, parts) => ({
     id: t.id, banId: t.ban_id, eventId: t.event_id, name: t.name, status: t.status, note: t.note || '',
@@ -147,7 +147,7 @@
       async updateMember(m) {
         await q(sb.from('members').update({ name: m.name, is_admin: m.isAdmin, fb_name: m.fbName || '', fb_url: m.fbUrl || '' }).eq('id', m.id));
         await q(sb.from('member_bans').delete().eq('member_id', m.id));
-        if (m.bans.length) await q(sb.from('member_bans').insert(m.bans.map((b) => ({ member_id: m.id, ban_id: b.banId, is_lead: b.isLead }))));
+        if (m.bans.length) await q(sb.from('member_bans').insert(m.bans.map((b) => ({ member_id: m.id, ban_id: b.banId, is_lead: !!b.isLead, is_vice: !b.isLead && !!b.isVice }))));
       },
       createAccount: (m) => script('createAccount', m),
       grantLogin: (id) => script('grantLogin', { memberId: id }),
@@ -219,10 +219,10 @@
         ['m-ngoc', 'Phạm Bảo Ngọc', 'ngoc@example.com', false, [['ban-sk', false]]],
         ['m-huy', 'Vũ Đức Huy', 'huy@example.com', false, [['ban-sk', false]]],
         ['m-linh', 'Đỗ Khánh Linh', 'linh@example.com', false, [['ban-tt', false]]],
-        ['m-bao', 'Hoàng Gia Bảo', 'bao@example.com', false, [['ban-tt', false]]],
+        ['m-bao', 'Hoàng Gia Bảo', 'bao@example.com', false, [['ban-tt', false, true]]],
         ['m-mai', 'Bùi Mai Anh', 'maianh@example.com', false, [['ban-tt', false]]],
         ['m-vy', 'Ngô Thảo Vy', 'vy@example.com', false, [['ban-sk', false]]],
-      ].map(([id, name, email, isAdmin, bans]) => ({ id, userId: 'u-' + id, email, name, isAdmin, active: true, mustChange: false, bans: bans.map(([banId, isLead]) => ({ banId, isLead })) })),
+      ].map(([id, name, email, isAdmin, bans]) => ({ id, userId: 'u-' + id, email, name, isAdmin, active: true, mustChange: false, bans: bans.map(([banId, isLead, isVice]) => ({ banId, isLead, isVice: !!isVice })) })),
       events: [{ id: 'ev-1', name: 'CHUYỆN NGHỀ MARKETING', date: iso(4) }, { id: 'ev-0', name: 'CHUYỆN NGHỀ NGÂN HÀNG', date: iso(-24) }, { id: 'ev-2', name: 'CHUYỆN NGHỀ KIỂM TOÁN', date: iso(25) }],
       tasks: [],
       settings: { reminder_days: 1, overdue_max_days: 7, sender_email: 'nhacviec.demo@gmail.com' },
@@ -330,7 +330,7 @@
         const p = row && row.parts.find((x) => x.id === partId);
         if (!p) throw err('Không tìm thấy phần việc này');
         const ban = db.bans.find((b) => b.id === row.banId);
-        const isMgr = me().isAdmin || me().bans.some((x) => x.banId === ban.id && x.isLead) || row.leadIds.includes(meId);
+        const isMgr = me().isAdmin || me().bans.some((x) => x.banId === ban.id && (x.isLead || x.isVice)) || row.leadIds.includes(meId);
         if (!isMgr && !p.assigneeIds.includes(meId)) throw err('Bạn chỉ được cập nhật phần việc được giao cho mình');
         if (link && !/^https?:\/\//i.test(link)) throw err('Liên kết phải bắt đầu bằng http:// hoặc https://');
         const linkChanged = (link || '') !== p.link;

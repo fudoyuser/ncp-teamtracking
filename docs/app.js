@@ -57,9 +57,12 @@
   const roleById = (ban, id) => ban.roles.find((r) => r.id === id);
   const mName = (id) => { const m = memberById(id); return m ? m.name : '(đã xóa)'; };
   const isDone = (t) => t.status === 'done';
-  const isLeadOfBan = (banId) => me().bans.some((b) => b.banId === banId && b.isLead);
+  // Trưởng ban và Phó ban cùng quyền quản lý Ban
+  const isMgrLink = (b) => b.isLead || b.isVice;
+  const banRoleName = (m) => (m.isAdmin ? 'Admin' : m.bans.some((b) => b.isLead) ? 'Trưởng ban' : m.bans.some((b) => b.isVice) ? 'Phó ban' : 'Thành viên');
+  const isLeadOfBan = (banId) => me().bans.some((b) => b.banId === banId && isMgrLink(b));
   const canManageBan = (banId) => me().isAdmin || isLeadOfBan(banId);
-  const canCreateEvent = () => me().isAdmin || me().bans.some((b) => b.isLead);
+  const canCreateEvent = () => me().isAdmin || me().bans.some(isMgrLink);
   const isTaskLead = (t) => t.leadIds.includes(me().id);
   const isAssignee = (t) => t.parts.some((p) => p.assigneeIds.includes(me().id));
   const canFull = (t) => canManageBan(t.banId) || isTaskLead(t);
@@ -104,7 +107,7 @@
         ${message ? `<p class="alert">${esc(message)}</p>` : ''}
         ${S.demo ? `
           <p class="demo-note">Đang chạy <b>chế độ demo</b> với dữ liệu mẫu (tên giả). Chọn một người để đăng nhập thử:</p>
-          <select name="demo">${S.demoUsers.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.isAdmin ? ' – Admin' : m.bans.some((b) => b.isLead) ? ' – Trưởng ban' : ''}</option>`).join('')}</select>`
+          <select name="demo">${S.demoUsers.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${banRoleName(m) === 'Thành viên' ? '' : ' – ' + banRoleName(m)}</option>`).join('')}</select>`
         : `
           <label>Email<input name="email" type="email" autocomplete="username" required></label>
           <label>Mật khẩu<input name="password" type="password" autocomplete="current-password" required></label>`}
@@ -177,7 +180,7 @@
   function render() {
     if (me().mustChange && !S.demo) return renderForceChange();
     const m = me();
-    const role = m.isAdmin ? 'Admin' : m.bans.some((b) => b.isLead) ? 'Trưởng ban' : 'Thành viên';
+    const role = banRoleName(m);
     $('#app').innerHTML = `
       <header class="topbar">
         <div class="brand">📋 <span>${esc(CFG.CLUB_NAME || 'TeamTracking')}</span>${S.demo ? '<em class="demo-tag">DEMO</em>' : ''}</div>
@@ -442,8 +445,8 @@
           : `<label>Trạng thái<select name="status" ${editable ? '' : 'disabled'}>${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select></label>`}
         <label>Ghi chú<textarea name="note" rows="3" ${editable ? '' : 'disabled'}>${esc(t.note)}</textarea></label>
         <div class="field ${linkMode(b) && !t.links.length ? 'hidden' : ''}"><span class="lbl">${linkMode(b) ? 'Liên kết khác' : 'Liên kết sản phẩm'}</span><div id="links">
-          ${links.map((l) => linkRow(l, !editable)).join('')}</div>
-          ${editable ? '<button type="button" class="btn ghost small" data-act="link-add">＋ Thêm liên kết</button>' : ''}</div>
+          ${links.map((l) => linkRow(l, !(editable && (full || !linkMode(b))))).join('')}</div>
+          ${editable && (full || !linkMode(b)) ? '<button type="button" class="btn ghost small" data-act="link-add">＋ Thêm liên kết</button>' : ''}</div>
       </div>
       <footer class="m-foot">
         ${!creating && canManageBan(t.banId) ? `<button type="button" class="btn danger-ghost" data-act="delete" data-id="${esc(t.id)}">Xóa</button>` : '<span></span>'}
@@ -471,7 +474,8 @@
       return { r, p, status: wantDone ? ((p.status || 'todo') === 'done' ? 'doing' : (p.status || 'todo')) : st, link: ln, wantDone };
     });
     if (partVals.some((x) => x.link && !isHttp(x.link))) return toast('Link phải bắt đầu bằng http:// hoặc https://', 'error');
-    const task = { id: t.id, banId: b.id, status: pm ? t.status : fd.get('status'), note: String(fd.get('note') || '').trim(), links };
+    // Thành viên thường ở Ban có link theo vai trò: không sửa liên kết chung (ô bị khóa nên không gửi kèm form)
+    const task = { id: t.id, banId: b.id, status: pm ? t.status : fd.get('status'), note: String(fd.get('note') || '').trim(), links: !full && linkMode(b) ? t.links : links };
     await run(async () => {
       if (full) {
         task.name = String(fd.get('name') || '').trim();
@@ -528,7 +532,7 @@
   const memberDone = (c, mid) => required(c).every((a) => actionDone(c.id, mid, a));
   const participants = () => activeMembers().map((m) => m.id); // mặc định 100% thành viên tham gia
   const bonusCount = (c) => participants().filter((mid) => c.actions.some((a) => BONUS.includes(a) && actionDone(c.id, mid, a))).length;
-  const canSeed = () => me().isAdmin || me().bans.some((b) => b.isLead);
+  const canSeed = () => me().isAdmin || me().bans.some(isMgrLink);
   const hasExt = () => document.documentElement.getAttribute('data-pccv-ext') === '1';
   const fbLink = (m) => (m && m.fbUrl ? ` <a href="${esc(m.fbUrl)}" target="_blank" rel="noopener" title="Trang Facebook" class="fb-link">ⓕ</a>` : '');
 
@@ -1230,8 +1234,8 @@
       <div class="table-wrap"><table class="tasks"><thead><tr><th>Thành viên</th><th>Ban</th><th>Quyền</th><th>Chống spam</th><th>Trạng thái</th><th></th></tr></thead><tbody>
       ${list.map((m) => { const c = CONFIRM[confirmOf(m.id)]; return `<tr class="${m.active ? '' : 'done'}">
         <td><b>${esc(m.name)}</b>${fbLink(m)}<div class="muted small">${esc(m.email)}</div></td>
-        <td>${m.bans.map((x) => { const b = banById(x.banId); return b ? `<span class="chip ${x.isLead ? 'me' : ''}">${x.isLead ? '★ ' : ''}${esc(b.name)}</span>` : ''; }).join('') || '<span class="muted small">—</span>'}</td>
-        <td>${m.isAdmin ? '<span class="badge ok">Admin</span>' : m.bans.some((x) => x.isLead) ? '<span class="badge">Trưởng ban</span>' : '<span class="muted small">Thành viên</span>'}</td>
+        <td>${m.bans.map((x) => { const b = banById(x.banId); return b ? `<span class="chip ${isMgrLink(x) ? 'me' : ''}">${x.isLead ? '★ ' : x.isVice ? '☆ ' : ''}${esc(b.name)}${x.isVice ? ' (phó)' : ''}</span>` : ''; }).join('') || '<span class="muted small">—</span>'}</td>
+        <td>${m.isAdmin ? '<span class="badge ok">Admin</span>' : banRoleName(m) !== 'Thành viên' ? `<span class="badge">${banRoleName(m)}</span>` : '<span class="muted small">Thành viên</span>'}</td>
         <td>${m.userId ? `<span class="badge ${c[2]}">${c[0]} ${c[1]}</span>` : '<span class="muted small">—</span>'}</td>
         <td>${!m.active ? '<span class="badge muted">Đã khóa</span>' : !m.userId ? '<span class="badge warn">Chưa có đăng nhập</span>' : m.mustChange ? '<span class="badge warn">Chưa đổi mật khẩu</span>' : '<span class="badge ok">Hoạt động</span>'}</td>
         <td class="row-actions"><button class="btn ghost small" data-act="edit-member" data-id="${esc(m.id)}">Sửa</button>
@@ -1244,9 +1248,12 @@
   function banPicker(selected) {
     return `<div class="ban-picker">${D().bans.map((b) => { const s = selected.find((x) => x.banId === b.id); return `<div class="ban-pick">
       <label class="check"><input type="checkbox" name="ban" value="${esc(b.id)}" ${s ? 'checked' : ''}> ${esc(b.name)}</label>
-      <label class="check small"><input type="checkbox" name="lead:${esc(b.id)}" ${s && s.isLead ? 'checked' : ''}> Trưởng ban</label></div>`; }).join('')}</div>`;
+      <select name="pos:${esc(b.id)}" aria-label="Chức vụ trong ${esc(b.name)}">
+        <option value="">Thành viên</option>
+        <option value="vice" ${s && s.isVice && !s.isLead ? 'selected' : ''}>Phó ban</option>
+        <option value="lead" ${s && s.isLead ? 'selected' : ''}>Trưởng ban</option></select></div>`; }).join('')}</div>`;
   }
-  const readBans = (fd) => fd.getAll('ban').map((id) => ({ banId: id, isLead: !!fd.get('lead:' + id) }));
+  const readBans = (fd) => fd.getAll('ban').map((id) => ({ banId: id, isLead: fd.get('pos:' + id) === 'lead', isVice: fd.get('pos:' + id) === 'vice' }));
 
   function openAccountModal() {
     openModal(`<form id="acct-form">${modalHead('Cấp tài khoản mới')}
@@ -1310,7 +1317,7 @@
         const mem = activeMembers().filter((m) => m.bans.some((x) => x.banId === b.id));
         return `<div class="card"><div class="row-between"><h3>${esc(b.name)}</h3><button class="btn ghost small" data-act="edit-ban" data-id="${esc(b.id)}">Sửa</button></div>
           <p class="small">Vai trò: ${b.roles.map((r) => `<span class="chip">${esc(r.label)}${r.hasDeadline ? '' : ' (không deadline)'}${r.hasStatus ? ' · trạng thái riêng' : ''}${r.hasLink ? ' · link' : ''}</span>`).join('') || '<span class="muted">chưa có</span>'}</p>
-          <p class="muted small">${n} công việc · ${mem.length} thành viên · Trưởng ban: ${esc(mem.filter((m) => m.bans.some((x) => x.banId === b.id && x.isLead)).map((m) => m.name).join(', ') || 'chưa có')}</p></div>`;
+          <p class="muted small">${n} công việc · ${mem.length} thành viên · Trưởng ban: ${esc(mem.filter((m) => m.bans.some((x) => x.banId === b.id && x.isLead)).map((m) => m.name).join(', ') || 'chưa có')}${mem.some((m) => m.bans.some((x) => x.banId === b.id && x.isVice && !x.isLead)) ? ' · Phó ban: ' + esc(mem.filter((m) => m.bans.some((x) => x.banId === b.id && x.isVice && !x.isLead)).map((m) => m.name).join(', ')) : ''}</p></div>`;
       }).join('')}</div>`;
   }
 
@@ -1386,7 +1393,7 @@
         <label>Nhắc trước deadline bao nhiêu ngày<input name="reminder_days" type="number" min="0" max="14" value="${esc(s.reminder_days ?? 1)}"></label>
         <label>Nhắc việc quá hạn trong tối đa bao nhiêu ngày<input name="overdue_max_days" type="number" min="0" max="60" value="${esc(s.overdue_max_days ?? 7)}"></label>
         <p class="muted small">Mỗi sáng (8–9h) hệ thống gửi <b>một email tổng hợp</b> cho từng người. Mỗi mốc chỉ nhắc 1 lần; đổi deadline thì nhắc lại theo deadline mới.
-          Trưởng ban nhận thêm bản tổng hợp tuần vào thứ Hai.</p>
+          Trưởng ban và Phó ban nhận thêm bản tổng hợp tuần vào thứ Hai.</p>
         <p class="small">Địa chỉ gửi mail: <b>${esc(s.sender_email || '(chưa cài Apps Script)')}</b></p>
         <fieldset class="pause-box"><legend>Tạm hoãn gửi mail tự động</legend>
           <p class="small">Trạng thái: ${mailPaused() ? '<span class="badge warn">⏸ Đang tạm hoãn</span>' : '<span class="badge ok">▶ Đang gửi bình thường</span>'}</p>
