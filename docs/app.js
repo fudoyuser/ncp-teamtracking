@@ -588,9 +588,13 @@
     const blob = ' ' + lines.join(' | ') + ' ';
     const urlSet = new Set((urls || []).map(normFb).filter(Boolean));
     return members.map((m) => {
-      const cands = [m.fbName, m.name].filter(Boolean).map(nkey);
+      // Tên Facebook (thường ngắn: "Linh", "Mai Chi") phải khớp NGUYÊN DÒNG để tránh nhận nhầm người lạ trùng tên;
+      // họ tên thật đủ 3 chữ trở lên thì cho phép khớp một phần dòng.
+      const fb = nkey(m.fbName), full = nkey(m.name);
       const byUrl = m.fbUrl && urlSet.has(normFb(m.fbUrl));
-      return { m, found: byUrl || cands.some((k) => lines.includes(k) || blob.includes(' ' + k + ' ')) };
+      const byFb = fb && lines.includes(fb);
+      const byName = full && (lines.includes(full) || (full.split(' ').length >= 3 && blob.includes(' ' + full + ' ')));
+      return { m, found: !!(byUrl || byFb || byName) };
     });
   }
 
