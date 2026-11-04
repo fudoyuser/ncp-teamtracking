@@ -198,11 +198,29 @@ end $$;
 alter table public.task_parts add column if not exists link_check text not null default '';
 alter table public.task_parts add column if not exists link_check_note text not null default '';
 alter table public.task_parts add column if not exists link_checked_at timestamptz;
+-- Vai trò có link sản phẩm (Content, Design): Hoàn thành chỉ khi link đã được xác nhận có quyền chỉnh sửa
+create or replace function public.part_done_blocked(p_role uuid, p_check text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce((select has_link from ban_roles where id = p_role), false) and coalesce(p_check, '') not in ('edit', 'edit_link')
+$$;
 create or replace function public.task_parts_before_write() returns trigger
-language plpgsql as $$
+language plpgsql security definer set search_path = public as $$
+declare link_changed boolean;
 begin
-  if tg_op = 'INSERT' or new.link is distinct from old.link then
+  if tg_op = 'INSERT' then
+    -- Lưu ý: "upsert" cũng chạy nhánh này cho dòng đã có → không chặn ở đây (chặn ở AFTER INSERT)
+    if coalesce(auth.role(), '') <> 'service_role' then new.link_check := ''; new.link_check_note := ''; new.link_checked_at := null; end if;
+    return new;
+  end if;
+  link_changed := new.link is distinct from old.link;
+  if link_changed then
     new.link_check := ''; new.link_check_note := ''; new.link_checked_at := null;  -- link đổi → kết quả cũ không còn đúng
+  elsif coalesce(auth.role(), '') <> 'service_role' then
+    -- Chỉ Apps Script (service_role) được ghi kết quả kiểm tra quyền link
+    new.link_check := old.link_check; new.link_check_note := old.link_check_note; new.link_checked_at := old.link_checked_at;
+  end if;
+  if new.status = 'done' and (old.status is distinct from 'done' or link_changed) and part_done_blocked(new.role_id, new.link_check) then
+    raise exception 'Cần gắn link sản phẩm có quyền chỉnh sửa (đã kiểm tra) trước khi xác nhận Hoàn thành';
   end if;
   return new;
 end $$;
@@ -229,6 +247,9 @@ end $$;
 create or replace function public.task_parts_after_write() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
+  if tg_op = 'INSERT' and new.status = 'done' and part_done_blocked(new.role_id, new.link_check) then
+    raise exception 'Cần gắn link sản phẩm có quyền chỉnh sửa (đã kiểm tra) trước khi xác nhận Hoàn thành';
+  end if;
   perform sync_task_status(new.task_id);
   return null;
 end $$;

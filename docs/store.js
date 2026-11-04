@@ -303,6 +303,12 @@
           t.parts.forEach((p) => {
             const ex = row.parts.find((x) => x.roleId === p.roleId);
             const val = { deadline: p.deadline, assigneeIds: p.assigneeIds, status: p.status || 'todo', link: p.link || '' };
+            const role = (db.bans.find((b) => b.id === row.banId) || { roles: [] }).roles.find((r) => r.id === p.roleId);
+            const linkChanged = !ex || val.link !== ex.link;
+            if (linkChanged && ex) Object.assign(ex, { linkCheck: '', linkCheckNote: '', linkCheckedAt: null });
+            if (val.status === 'done' && (!ex || ex.status !== 'done' || linkChanged) && role && role.hasLink && !['edit', 'edit_link'].includes(ex && ex.linkCheck)) {
+              throw err('Cần gắn link sản phẩm có quyền chỉnh sửa (đã kiểm tra) trước khi xác nhận Hoàn thành');
+            }
             if (ex) Object.assign(ex, val);
             else row.parts.push(Object.assign({ id: uid(), roleId: p.roleId }, val));
           });
@@ -330,7 +336,12 @@
         const isMgr = me().isAdmin || me().bans.some((x) => x.banId === ban.id && x.isLead) || row.leadIds.includes(meId);
         if (!isMgr && !p.assigneeIds.includes(meId)) throw err('Bạn chỉ được cập nhật phần việc được giao cho mình');
         if (link && !/^https?:\/\//i.test(link)) throw err('Liên kết phải bắt đầu bằng http:// hoặc https://');
-        if ((link || '') !== p.link) Object.assign(p, { linkCheck: '', linkCheckNote: '', linkCheckedAt: null });
+        const linkChanged = (link || '') !== p.link;
+        if (linkChanged) Object.assign(p, { linkCheck: '', linkCheckNote: '', linkCheckedAt: null });
+        const role = ban.roles.find((r) => r.id === p.roleId);
+        if (status === 'done' && (p.status !== 'done' || linkChanged) && role && role.hasLink && !['edit', 'edit_link'].includes(p.linkCheck)) {
+          throw err('Cần gắn link sản phẩm có quyền chỉnh sửa (đã kiểm tra) trước khi xác nhận Hoàn thành');
+        }
         Object.assign(p, { status, link: link || '' });
         syncStatus(row);
         return clone(row);

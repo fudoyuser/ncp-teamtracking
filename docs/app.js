@@ -432,7 +432,8 @@
           ${peopleEditor('role:' + r.id, p.assigneeIds, b.id, !full)}
           ${r.hasDeadline ? `<label class="inline">Deadline <input type="date" name="dl:${esc(r.id)}" value="${esc(p.deadline)}" ${dis}></label>` : ''}
           ${r.hasStatus ? `<label class="inline">Trạng thái <select name="st:${esc(r.id)}" ${full || canEditPart(t, p) ? '' : 'disabled'}>${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === (p.status || 'todo') ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select></label>` : ''}
-          ${r.hasLink ? `<label class="inline">Link ${esc(r.label)} <input name="ln:${esc(r.id)}" placeholder="https://…" value="${esc(p.link || '')}" ${full || canEditPart(t, p) ? '' : 'disabled'}></label>` : ''}</fieldset>`; }).join('')}</div>
+          ${r.hasLink ? `<label class="inline">Link ${esc(r.label)} <input name="ln:${esc(r.id)}" placeholder="https://…" value="${esc(p.link || '')}" ${full || canEditPart(t, p) ? '' : 'disabled'}></label>
+            <p class="muted small">Muốn chọn Hoàn thành: link phải mở quyền <b>chỉnh sửa</b> (Google Docs: "Bất kỳ ai có đường liên kết – Người chỉnh sửa"; Canva: link "Chỉnh sửa").</p>` : ''}</fieldset>`; }).join('')}</div>
         <div class="field"><span class="lbl">Lead CV</span>${peopleEditor('lead', t.leadIds, b.id, !full)}</div>
         ${partMode(b) ? `<p class="muted small">Trạng thái chung: <b>${STATUS[t.status]}</b> – tự tính từ trạng thái từng vai trò (xong hết = Hoàn thành).</p>`
           : `<label>Trạng thái<select name="status" ${editable ? '' : 'disabled'}>${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${STATUS[k]}</option>`).join('')}</select></label>`}
@@ -462,7 +463,9 @@
       const p = partFor(t, r.id);
       const st = r.hasStatus && fd.get('st:' + r.id) ? fd.get('st:' + r.id) : (p.status || 'todo');
       const ln = r.hasLink && fd.get('ln:' + r.id) !== null ? String(fd.get('ln:' + r.id) || '').trim() : (p.link || '');
-      return { r, p, status: st, link: ln };
+      // Content/Design muốn Hoàn thành: lưu link trước (chưa Hoàn thành), kiểm tra quyền rồi mới xác nhận
+      const wantDone = r.hasLink && st === 'done' && ((p.status || 'todo') !== 'done' || ln !== (p.link || ''));
+      return { r, p, status: wantDone ? ((p.status || 'todo') === 'done' ? 'doing' : (p.status || 'todo')) : st, link: ln, wantDone };
     });
     if (partVals.some((x) => x.link && !isHttp(x.link))) return toast('Link phải bắt đầu bằng http:// hoặc https://', 'error');
     const task = { id: t.id, banId: b.id, status: pm ? t.status : fd.get('status'), note: String(fd.get('note') || '').trim(), links };
@@ -488,11 +491,19 @@
         const changed = partVals.filter((x) => canEditPart(t, x.p) && (x.status !== (x.p.status || 'todo') || x.link !== (x.p.link || '')));
         for (const x of changed) saved = await S.savePart(t.id, x.p.id, x.status, x.link);
       }
-      const relink = partVals.filter((x) => x.r.hasLink && x.link && x.link !== (x.p.link || '')).map((x) => (saved.parts.find((y) => y.roleId === x.r.id) || {}).id).filter(Boolean);
+      const problems = [];
+      for (const x of partVals.filter((v) => v.wantDone)) {
+        const sp = saved.parts.find((y) => y.roleId === x.r.id);
+        if (!sp) continue;
+        const why = await editableLinkProblem(sp, x.r);
+        if (why) problems.push(why); else saved = await S.savePart(saved.id, sp.id, 'done', sp.link);
+      }
+      const relink = partVals.filter((x) => !x.wantDone && x.r.hasLink && x.link && x.link !== (x.p.link || '')).map((x) => (saved.parts.find((y) => y.roleId === x.r.id) || {}).id).filter(Boolean);
       const i = D().tasks.findIndex((x) => x.id === saved.id);
       if (i >= 0) D().tasks[i] = saved; else D().tasks.push(saved);
       closeModal();
-      toast(creating ? 'Đã thêm công việc.' : 'Đã lưu.');
+      if (problems.length) toast('Đã lưu, nhưng CHƯA xác nhận Hoàn thành – ' + problems.join(' · '), 'error');
+      else toast(creating ? 'Đã thêm công việc.' : 'Đã lưu.');
       renderMain();
       if (relink.length) checkPartLinks(saved, relink);
     }, $('#save-btn'));
@@ -1520,6 +1531,19 @@
     }
     renderMain();
   }
+  // Content/Design: chỉ được Hoàn thành khi link sản phẩm đã được xác nhận có quyền chỉnh sửa. Trả về '' nếu đạt, không thì lý do.
+  const LINK_OK = ['edit', 'edit_link'];
+  async function editableLinkProblem(p, r) {
+    if (!r || !r.hasLink) return '';
+    if (!isHttp(p.link)) return `Hãy gắn link sản phẩm ${r.label} (link có quyền chỉnh sửa) trước khi xác nhận Hoàn thành.`;
+    if (!LINK_OK.includes(p.linkCheck)) {
+      try {
+        const res = await S.checkLink(p.id);
+        Object.assign(p, { linkCheck: res.state, linkCheckNote: res.note, linkCheckedAt: new Date().toISOString() });
+      } catch (e) { return `Chưa kiểm tra được quyền của link ${r.label} (${e.message}).`; }
+    }
+    return LINK_OK.includes(p.linkCheck) ? '' : `Link ${r.label} chưa có quyền chỉnh sửa: ${p.linkCheckNote || 'không xác định'}`;
+  }
   const actions = {
     view: (el) => { state.view = el.dataset.view; ss.set('view', state.view); render(); window.scrollTo(0, 0); },
     'admin-tab': (el) => { state.adminTab = el.dataset.tab; ss.set('adminTab', state.adminTab); renderMain(); },
@@ -1706,6 +1730,10 @@
       const prev = p.status;
       el.disabled = true;
       await run(async () => {
+        if (el.value === 'done') {
+          const why = await editableLinkProblem(p, roleById(banById(t.banId), p.roleId));
+          if (why) { renderMain(); throw new Error(why); }
+        }
         const saved = await S.savePart(t.id, p.id, el.value, p.link);
         Object.assign(t, saved);
         toast(saved.status === 'done' ? '🎉 Công việc đã hoàn thành!' : el.value === 'done' ? '✓ Đã xong phần của bạn.' : 'Đã cập nhật trạng thái.');
